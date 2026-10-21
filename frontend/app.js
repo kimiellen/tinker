@@ -274,6 +274,17 @@ let currentLine = 0;
 let loopOne = false;
 let speedIdx = 0;
 let linePlaying = false;
+let activeLine = -1; // currentTime 实际落在的句；间奏段为 -1（播放中不高亮任何句）
+
+// t 落在哪句返回哪句下标；句间间隙（间奏）返回 -1。lines 按 start 有序。
+// 整文件连播不切片：句界即前句 end = 后句 start，高亮按时间戳归属，天然无重复
+function lineAtTime(lines, t) {
+  for (let i = 0; i < lines.length; i++) {
+    if (t < lines[i].start) return -1;
+    if (t < lines[i].end) return i;
+  }
+  return -1;
+}
 
 // 把一句歌词渲染成带连读/吞音高亮的 HTML（所有原文先转义，再包高亮 span）
 const _normWord = (w) => w.toLowerCase().replace(/[^a-z0-9']+/g, "");
@@ -357,24 +368,40 @@ function openLearn(song) {
       }
       el.appendChild(tip);
     }
-    el.onclick = () => playLine(line.index - 1);
+    el.onclick = () => jumpToLine(line.index - 1);
     list.appendChild(el);
     return el;
   });
   player.src = `/api/songs/${song.id}/audio`;
   currentLine = 0;
+  activeLine = -1;
   linePlaying = false;
   updateLearnUI(); // 初始化播放按钮图标
   show("learn");
 }
 
-function playLine(i) {
+// 跳到某句起播；之后不再干预播放头，音频自然连播，高亮靠 timeupdate 跟随。
+// 连播全程零 seek——旧方案每句结尾回退 seek 接下一句，timeupdate 约 0.25s
+// 延迟会把下一句开头重播一遍（用户反馈的"句首重复发音"），这里从根上消除
+function jumpToLine(i) {
   const lines = learnSong.lines;
   currentLine = Math.max(0, Math.min(i, lines.length - 1));
+  activeLine = currentLine;
   player.playbackRate = SPEEDS[speedIdx];
   player.currentTime = lines[currentLine].start;
   player.play();
   linePlaying = true;
+  updateLearnUI();
+  scrollLineIntoView();
+}
+
+// 上/下一句：seek 到目标句首。播放中继续连播；暂停中只移动高亮与进度
+function stepLine(d) {
+  if (!learnSong) return;
+  const lines = learnSong.lines;
+  currentLine = Math.max(0, Math.min(currentLine + d, lines.length - 1));
+  activeLine = currentLine;
+  player.currentTime = lines[currentLine].start;
   updateLearnUI();
   scrollLineIntoView();
 }
@@ -397,22 +424,29 @@ const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="
 
 player.addEventListener("timeupdate", () => {
   if (!linePlaying || !learnSong) return;
-  const line = learnSong.lines[currentLine];
-  if (player.currentTime >= line.end) {
-    if (loopOne) {
-      player.currentTime = line.start; // 回到句首，实现单句循环
-    } else if (currentLine < learnSong.lines.length - 1) {
-      playLine(currentLine + 1); // 默认顺序连播：自动接下一句
-    } else {
-      player.pause(); // 唱到最后一句就停
-      linePlaying = false;
-      updateLearnUI();
-    }
+  const lines = learnSong.lines;
+  // 单句循环：越过句尾跳回句首——这是唯一的 seek 场景
+  if (loopOne && player.currentTime >= lines[currentLine].end) {
+    player.currentTime = lines[currentLine].start;
+    return;
+  }
+  // 连播：只移动高亮，不碰播放头
+  const i = lineAtTime(lines, player.currentTime);
+  if (i === activeLine) return;
+  activeLine = i;
+  if (i >= 0) {
+    currentLine = i; // 上/下一句与循环以正在唱的句为基准
+    updateLearnUI();
+    scrollLineIntoView();
+  } else {
+    updateLearnUI(); // 间奏段：不高亮任何句
   }
 });
 
 function updateLearnUI() {
-  lineEls.forEach((el, i) => el.classList.toggle("playing", i === currentLine && linePlaying));
+  // 播放中亮 activeLine（间奏 -1 则全灭）；暂停时亮选中的 currentLine
+  const hl = linePlaying ? activeLine : currentLine;
+  lineEls.forEach((el, i) => el.classList.toggle("playing", i === hl));
   $("btn-play").innerHTML = linePlaying ? ICON_PAUSE : ICON_PLAY;
 }
 
@@ -424,13 +458,21 @@ function stopLearning() {
 
 $("btn-learn-back").onclick = () => { show("library"); loadSongs(); };
 
-function togglePlay() {
+// 学习页的播放/暂停。叫 toggleLearnPlay 而不叫 togglePlay——
+// 歌曲库的 toggleLibraryPlay 曾与它同名撞车，后者被覆盖失效
+function toggleLearnPlay() {
   if (linePlaying) {
     player.pause();
     linePlaying = false;
     updateLearnUI();
+  } else if (player.currentTime > 0 && !player.ended) {
+    // 从暂停点继续连播，不跳回句首
+    player.playbackRate = SPEEDS[speedIdx];
+    player.play();
+    linePlaying = true;
+    updateLearnUI();
   } else {
-    playLine(currentLine);
+    jumpToLine(currentLine); // 还没开播或已播完：从当前句起播
   }
 }
 function toggleLoop() {
@@ -443,9 +485,9 @@ function cycleSpeed() {
   $("speed-label").textContent = SPEEDS[speedIdx] + "x";
 }
 
-$("btn-play").onclick = togglePlay;
-$("btn-prev").onclick = () => playLine(currentLine - 1);
-$("btn-next").onclick = () => playLine(currentLine + 1);
+$("btn-play").onclick = toggleLearnPlay;
+$("btn-prev").onclick = () => stepLine(-1);
+$("btn-next").onclick = () => stepLine(1);
 $("btn-loop").onclick = toggleLoop;
 $("btn-speed").onclick = cycleSpeed;
 
@@ -453,9 +495,9 @@ $("btn-speed").onclick = cycleSpeed;
 document.addEventListener("keydown", (e) => {
   if (!screens.learn.classList.contains("active") || !learnSong) return;
   const actions = {
-    " ": togglePlay,
-    ArrowLeft: () => playLine(currentLine - 1),
-    ArrowRight: () => playLine(currentLine + 1),
+    " ": toggleLearnPlay,
+    ArrowLeft: () => stepLine(-1),
+    ArrowRight: () => stepLine(1),
     ArrowUp: toggleLoop,
     ArrowDown: cycleSpeed,
   };
@@ -499,7 +541,14 @@ async function startSinging() {
   $("sing-hint").hidden = false;
 }
 
-player.addEventListener("ended", () => { if (singing) stopSinging(); });
+player.addEventListener("ended", () => {
+  if (singing) stopSinging();
+  if (linePlaying) { // 连播到曲末自然结束：停在最末句，图标回到播放
+    linePlaying = false;
+    activeLine = -1;
+    updateLearnUI();
+  }
+});
 
 async function stopSinging() {
   if (!singing) return;
@@ -576,7 +625,7 @@ function renderEval(a) {
     card.appendChild(icon);
     card.appendChild(body);
     card.style.cursor = "pointer";
-    card.onclick = () => { show("learn"); playLine(j.index - 1); }; // 点卡片回去听这句
+    card.onclick = () => { show("learn"); jumpToLine(j.index - 1); }; // 点卡片回去听这句
     list.appendChild(card);
   }
   drawPitch(a.curve, evalSong.lines);
