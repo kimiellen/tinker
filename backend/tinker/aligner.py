@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import difflib
 import re
-import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
+from .audio import decode_audio_16k
 
 # 英文儿歌场景：small.en 精度足够，CPU int8 下一首 3 分钟的歌约半分钟
 MODEL_NAME = "small.en"
@@ -51,25 +50,10 @@ def _get_model():
     return _model
 
 
-def _decode_audio_16k(audio_path: Path):
-    """用 ffmpeg 解码为 16kHz 单声道 float32，绕开 PyAV。
-
-    faster-whisper 1.2.x 的 av.open(metadata_errors=...) 与 av>=15 不兼容，
-    而旧版 av 在 Python 3.14 上没有预编译 wheel；录音本来就是 wav，
-    让系统 ffmpeg（项目已有的依赖工具）解码最省事。
-    """
-    out = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(audio_path),
-         "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
-        capture_output=True, check=True,
-    )
-    return np.frombuffer(out.stdout, dtype=np.float32)
-
-
 def transcribe_words(audio_path: Path) -> list[Word]:
     """转写音频，返回规范化后的词级时间戳序列。"""
     model = _get_model()
-    segments, _ = model.transcribe(_decode_audio_16k(audio_path), language="en", word_timestamps=True)
+    segments, _ = model.transcribe(decode_audio_16k(audio_path), language="en", word_timestamps=True)
     words = []
     for seg in segments:
         for w in seg.words or []:

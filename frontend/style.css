@@ -148,3 +148,26 @@ dialog input:focus { outline: none; border-color: var(--teal); }
 .pbtn.main { width: 68px; height: 68px; background: var(--coral); color: #fff; font-size: 28px; }
 .pbtn.on { background: var(--teal); color: #fff; }
 .speed { font-size: 14px; font-weight: bold; color: var(--ink); width: 48px; text-align: center; }
+
+/* 跟唱评估页 */
+.btn-mid { font-size: 18px; padding: 14px 36px; }
+.score-hero { text-align: center; padding: 24px; margin-top: 16px; }
+.score-hero .emoji { font-size: 56px; }
+.score-hero h2 { font-size: 24px; margin: 8px 0 4px; }
+.pitch-box { margin-top: 18px; }
+#pitch-canvas { width: 100%; border-radius: 12px; background: #FFFCF7; }
+.pitch-legend { display: flex; gap: 20px; justify-content: center; font-size: 13px; margin-top: 8px; }
+.pitch-legend i { display: inline-block; width: 20px; height: 5px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+.judge-list { margin-top: 18px; }
+.judge {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 14px 16px; border-radius: 16px; margin-bottom: 10px;
+  background: var(--card);
+}
+.judge .icon { font-size: 24px; flex-shrink: 0; }
+.judge.good { background: var(--teal-soft); }
+.judge.bad  { background: var(--coral-soft); }
+.judge.warn { background: var(--yellow-soft); }
+.judge.silent { background: #F0EAE2; }
+.judge .t { font-weight: bold; font-size: 16px; }
+.judge .d { font-size: 14px; color: var(--ink-soft); margin-top: 3px; line-height: 1.5; }
