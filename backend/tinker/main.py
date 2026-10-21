@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner, annotate, evaluator, llm
+from . import aligner, annotate, evaluator
 from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
@@ -127,8 +127,7 @@ def start_annotate(song_id: str) -> dict:
         raise HTTPException(status_code=400, detail="先完成分句再标注")
     if song.annotate_status == "running":
         raise HTTPException(status_code=409, detail="正在标注中")
-    if not llm.configured():
-        raise HTTPException(status_code=400, detail="没有配置 LLM API key（设置环境变量 TINKER_LLM_API_KEY）")
+    # 连读/吞音是本地规则引擎，无 key 也能出标注（翻译留空，配 key 后重跑即补上）
     song.annotate_status = "running"
     song.annotate_error = None
     store.update(song)

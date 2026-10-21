@@ -1,4 +1,4 @@
-"""annotate 解析与校验测试（不触碰真实 LLM）。"""
+"""annotate 解析测试（不触碰真实 LLM）。连读/吞音规则引擎的测试在 test_phon_rules.py。"""
 import json
 
 import pytest
@@ -14,46 +14,35 @@ def make_response(lines):
 
 def test_parse_happy_path():
     resp = make_response([
-        {"index": 1, "zh": "一闪一闪小星星",
-         "liaison": [["twinkle", "twinkle"]],
-         "swallow": [{"word": "little", "letters": "t"}]},
-        {"index": 2, "zh": "我多么想知道你是什么",
-         "liaison": [["How", "I"]],
-         "swallow": [{"word": "what", "letters": "t"}]},
+        {"index": 1, "zh": "一闪一闪小星星"},
+        {"index": 2, "zh": "我多么想知道你是什么"},
     ])
-    got = parse_response(resp, TEXTS)
-    assert got[1]["zh"] == "一闪一闪小星星"
-    assert got[1]["liaison"] == [["twinkle", "twinkle"]]
-    assert got[1]["swallow"] == [{"word": "little", "letters": "t"}]
-    assert got[2]["liaison"] == [["How", "I"]]
+    got = parse_response(resp, len(TEXTS))
+    assert got == {1: "一闪一闪小星星", 2: "我多么想知道你是什么"}
 
 
-def test_parse_drops_annotations_not_in_line():
+def test_parse_drops_bad_items():
     resp = make_response([
-        {"index": 1, "zh": "一闪一闪小星星",
-         # "little star" 相邻 ✓；"star twinkle" 不相邻 ✗；"banana" 不在句中 ✗
-         "liaison": [["little", "star"], ["star", "twinkle"], ["banana", "split"], "junk"],
-         "swallow": [{"word": "little", "letters": "t"},
-                     {"word": "banana", "letters": "b"},      # 词不在句中
-                     {"word": "twinkle", "letters": "xyz"},   # 字母不在词中
-                     {"word": "twinkle"}],                     # 缺 letters
-        },
-        {"index": 2, "zh": "我多么想知道你是什么", "liaison": [], "swallow": []},
+        {"index": 1, "zh": "一闪一闪小星星"},
+        {"index": 2, "zh": ""},                    # 空翻译
+        {"index": 99, "zh": "越界"},               # 行号越界
+        {"zh": "缺 index"},                          # 缺字段
+        "junk",
+        {"index": 2, "zh": "我多么想知道你是什么"},  # 合法项兜底
     ])
-    got = parse_response(resp, TEXTS)
-    assert got[1]["liaison"] == [["little", "star"]]
-    assert got[1]["swallow"] == [{"word": "little", "letters": "t"}]
+    got = parse_response(resp, len(TEXTS))
+    assert got == {1: "一闪一闪小星星", 2: "我多么想知道你是什么"}
 
 
 def test_parse_rejects_non_json():
     with pytest.raises(AnnotateError):
-        parse_response("这不是 JSON", TEXTS)
+        parse_response("这不是 JSON", len(TEXTS))
 
 
 def test_parse_rejects_too_many_missing_lines():
-    resp = make_response([{"index": 1, "zh": "一闪一闪小星星", "liaison": [], "swallow": []}])
+    resp = make_response([{"index": 1, "zh": "一闪一闪小星星"}])
     with pytest.raises(AnnotateError, match="缺句"):
-        parse_response(resp, ["one", "two", "three", "four"])
+        parse_response(resp, 4)
 
 
 def test_build_prompt_numbers_lines():

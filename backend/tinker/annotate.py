@@ -1,18 +1,17 @@
-"""逐句翻译 + 连读/吞音标注：整首歌一次 LLM 调用。
+"""逐句翻译（LLM）+ 连读/吞音标注（本地规则引擎）。
 
-为什么是整歌一次而不是逐句调用：儿歌几十句，逐句调用慢且贵；整歌一次
-还能让模型看到上下文。结果（含翻译和标注）直接写进歌曲的 lines 里，
-加上 llm.py 的磁盘缓存，同一首歌不会重复调 API。
+翻译仍走 LLM：整首歌一次调用（儿歌几十句，逐句调用慢且贵；整歌一次还能
+让模型看到上下文），结果落盘缓存，同一首歌不重复调 API。
 
-标注是"按规则预标注"（spec 决策）：让 LLM 按英语发音规则从文本推断，
-不做音频实测。规则上宁少勿滥——标错比少标更误导孩子。
+连读/吞音已改本地音素级规则引擎（见 phon_rules.py，2026-10-21 spec-change）：
+LLM 不做音素推理，实测准确率仅三四成；规则是确定性的，准确、可测、零成本。
+没配 API key 时仍产出标注，翻译留空。
 """
 from __future__ import annotations
 
 import json
-import re
 
-from . import llm
+from . import llm, phon_rules
 
 
 class AnnotateError(Exception):
@@ -21,26 +20,15 @@ class AnnotateError(Exception):
 
 PROMPT_TEMPLATE = """你是儿童英语唱歌课的老师。下面是一首英文歌的歌词，共 {n} 句，已按顺序编号。
 
-请对每一句做三件事：
-1. 翻译成中文：给一年级小朋友看，要简短、口语化。
-2. 标注连读 liaison：相邻两个词在自然语流里应该连起来读（如前词尾辅音接后词头元音）。只标最典型、对孩子学唱最有帮助的。
-3. 标注吞音 swallow：单词里在自然语流中几乎不发音的字母（如 little 里的 t）。
+请把每一句翻译成中文：给一年级小朋友看，要简短、口语化。
 
 只输出 JSON，不要输出任何其他文字。格式：
-{{"lines": [{{"index": 1, "zh": "中文翻译", "liaison": [["词1", "词2"]], "swallow": [{{"word": "little", "letters": "t"}}]}}]}}
+{{"lines": [{{"index": 1, "zh": "中文翻译"}}]}}
 
-要求：
-- 每一句都要有，index 与输入编号一致；不漏句、不加句。
-- liaison 每项是两个相邻词的原文（去掉标点），必须在这句里相邻出现。
-- swallow 的 word 是句中原词，letters 是被吞掉的字母，必须出现在 word 里。
-- 拿不准就不标，宁少勿滥。
+要求：每一句都要有，index 与输入编号一致；不漏句、不加句。
 
 歌词：
 {numbered_lyrics}"""
-
-
-def _norm_word(w: str) -> str:
-    return re.sub(r"[^a-z0-9']+", "", w.lower())
 
 
 def build_prompt(texts: list[str]) -> str:
@@ -48,70 +36,49 @@ def build_prompt(texts: list[str]) -> str:
     return PROMPT_TEMPLATE.format(n=len(texts), numbered_lyrics=numbered)
 
 
-def parse_response(text: str, texts: list[str]) -> dict[int, dict]:
-    """解析 LLM 返回，校验标注确实落在原句里（LLM 会数错词，错的标注直接丢弃）。
-
-    返回 {index: {"zh", "liaison", "swallow"}}；缺句超过一半视为整体失败。
-    """
+def parse_response(text: str, n_lines: int) -> dict[int, str]:
+    """解析 LLM 翻译返回 {index: zh}；缺句超过一半视为整体失败。"""
     try:
-        data = json.loads(text)
-        items = data["lines"]
+        items = json.loads(text)["lines"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         raise AnnotateError(f"LLM 返回的不是预期 JSON：{e}") from e
 
-    tokens_by_line = {i: [_norm_word(w) for w in t.split()] for i, t in enumerate(texts, 1)}
-    result: dict[int, dict] = {}
+    result: dict[int, str] = {}
     for item in items:
         try:
-            idx = int(item["index"])
-            zh = str(item["zh"]).strip()
+            idx, zh = int(item["index"]), str(item["zh"]).strip()
         except (KeyError, TypeError, ValueError):
             continue
-        if idx not in tokens_by_line or not zh:
-            continue
-        tokens = tokens_by_line[idx]
-        liaison = []
-        for pair in item.get("liaison") or []:
-            if not isinstance(pair, list) or len(pair) != 2:
-                continue
-            a, b = str(pair[0]), str(pair[1])
-            if _adjacent(tokens, _norm_word(a), _norm_word(b)):
-                liaison.append([a, b])
-        swallow = []
-        for s in item.get("swallow") or []:
-            if not isinstance(s, dict):
-                continue
-            word, letters = str(s.get("word", "")), str(s.get("letters", ""))
-            if word and letters and _norm_word(word) in tokens and letters.lower() in word.lower():
-                swallow.append({"word": word, "letters": letters})
-        result[idx] = {"zh": zh, "liaison": liaison, "swallow": swallow}
+        if 1 <= idx <= n_lines and zh:
+            result[idx] = zh
 
-    if len(result) * 2 < len(texts):
-        raise AnnotateError(f"LLM 翻译缺句太多（{len(texts)} 句只译出 {len(result)} 句），请重试")
+    if len(result) * 2 < n_lines:
+        raise AnnotateError(f"LLM 翻译缺句太多（{n_lines} 句只译出 {len(result)} 句），请重试")
     return result
 
 
-def _adjacent(tokens: list[str], a: str, b: str) -> bool:
-    return any(tokens[i] == a and tokens[i + 1] == b for i in range(len(tokens) - 1))
-
-
-def annotate_lines(lines: list[dict]) -> None:
-    """对歌曲的逐句列表做翻译+标注，就地写入每行的 zh / liaison / swallow 字段。"""
-    texts = [l["text"] for l in lines]
+def _translate(texts: list[str]) -> dict[int, str]:
+    """整歌一次调用拿逐句翻译；一次格式重试后仍失败则报错。"""
     prompt = build_prompt(texts)
-    parsed = None
     last_error = None
     for attempt_prompt in (prompt, prompt + "\n\n注意：你上一次的输出不符合要求，这次请严格只输出规定的 JSON。"):
         try:
-            parsed = parse_response(llm.chat(attempt_prompt), texts)
-            break
+            return parse_response(llm.chat(attempt_prompt), len(texts))
         except AnnotateError as e:
             last_error = e
-    if parsed is None:
-        raise last_error
+    raise last_error
 
+
+def annotate_lines(lines: list[dict]) -> None:
+    """对歌曲的逐句列表做翻译+标注，就地写入每行的 zh / liaison / swallow 字段。
+
+    连读/吞音永远由本地规则引擎产出；翻译仅在有 API key 时请求 LLM，
+    否则保留行内已有翻译（没有则留空）。
+    """
+    texts = [l["text"] for l in lines]
+    translations = _translate(texts) if llm.configured() else {}
     for line in lines:
-        got = parsed.get(line["index"])
-        line["zh"] = got["zh"] if got else ""
-        line["liaison"] = got["liaison"] if got else []
-        line["swallow"] = got["swallow"] if got else []
+        line["zh"] = translations.get(line["index"], line.get("zh", ""))
+        marks = phon_rules.annotate_line(line["text"])
+        line["liaison"] = marks["liaison"]
+        line["swallow"] = marks["swallow"]
