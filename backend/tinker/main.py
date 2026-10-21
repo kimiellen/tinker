@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import aligner, annotate, evaluator, llm
+from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
 
@@ -105,8 +106,10 @@ def start_align(song_id: str) -> dict:
 def _run_align(song_id: str) -> None:
     song = store.get(song_id)
     try:
-        words = aligner.transcribe_words(RECORDINGS_DIR / song.audio_file)
-        song.lines = aligner.align_lyrics(song.lyrics, words)
+        # 只解码一次：转写与切句边界细化吃同一份 16k 音频
+        audio = decode_audio_16k(RECORDINGS_DIR / song.audio_file)
+        words = aligner.transcribe_words(audio)
+        song.lines = aligner.align_lyrics(song.lyrics, words, audio)
         song.align_status = "done"
         # 重新分句后，旧的翻译标注属于旧的 lines，一并作废
         song.annotate_status = "none"

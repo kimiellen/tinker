@@ -13,9 +13,10 @@ import difflib
 import re
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 
-from .audio import decode_audio_16k
+import numpy as np
+
+from .audio import SAMPLE_RATE
 
 # small.en 对口音重、伴奏吵的演唱会产生大面积幻觉（把前奏听成
 # "thank you so much for watching"），实测 medium.en 才能稳定转写真实人声；
@@ -52,11 +53,11 @@ def _get_model():
     return _model
 
 
-def transcribe_words(audio_path: Path) -> list[Word]:
-    """转写音频，返回规范化后的词级时间戳序列。"""
+def transcribe_words(audio: np.ndarray) -> list[Word]:
+    """转写 16k 单声道音频，返回规范化后的词级时间戳序列。"""
     model = _get_model()
     segments, _ = model.transcribe(
-        decode_audio_16k(audio_path),
+        audio,
         language="en",
         word_timestamps=True,
         # 反幻觉：不带入上一段上下文（幻觉句会自我复制扩散），
@@ -84,8 +85,12 @@ def parse_lyrics(lyrics: str) -> list[tuple[str, list[str]]]:
     return parsed
 
 
-def align_lyrics(lyrics: str, words: list[Word]) -> list[dict]:
-    """产出逐句时间区间 [{index, text, start, end}]，按行号顺序、区间互不重叠。"""
+def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None) -> list[dict]:
+    """产出逐句时间区间 [{index, text, start, end}]，按行号顺序、区间互不重叠。
+
+    audio（16k 单声道）用于把相邻句的边界移到换气口的能量最低点；
+    不传则退化为纯文本匹配 + 中点切分（测试与离线推演用）。
+    """
     parsed = parse_lyrics(lyrics)
     if not parsed:
         raise AlignError("歌词是空的")
@@ -115,7 +120,8 @@ def align_lyrics(lyrics: str, words: list[Word]) -> list[dict]:
         raise AlignError("歌词和录音对不上，检查一下贴的是不是这首歌的歌词")
 
     _interpolate_gaps(intervals, words[-1].end)
-    _pad_and_clamp(intervals)
+    boundaries = _valley_boundaries(intervals, audio) if audio is not None else None
+    _pad_and_clamp(intervals, boundaries)
 
     return [
         {"index": i + 1, "text": raw, "start": round(iv[0], 2), "end": round(iv[1], 2)}
@@ -160,11 +166,56 @@ def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float)
         i = j
 
 
-def _pad_and_clamp(intervals: list[list[float]]) -> None:
-    """每句前后留一点余量；与相邻句冲突时取中点平分，保证区间不重叠。就地修改。"""
+def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[float | None]:
+    """对每对相邻句，在两句词锚点之间的空隙里找 RMS 能量最低点作为边界。
+
+    唱歌的尾音会拖过 whisper 给的词 end，中点切分会从尾音中间劈开
+    （上句被截断、下句开头带上句尾音）；两句之间几乎总有换气的音量
+    低谷，切在那里两头都干净。空隙太窄（真连唱）或太宽（>3s，是间奏
+    而非换气）时返回 None，走中点/各自留余量兜底。
+    """
+    # 25ms 窗、10ms 步长的短时能量包络；人声换气低谷在 100ms 尺度上足够清晰
+    frame, hop = int(0.025 * SAMPLE_RATE), int(0.010 * SAMPLE_RATE)
+    if len(audio) < frame:
+        return [None] * (len(intervals) - 1)
+    frames = np.lib.stride_tricks.sliding_window_view(audio, frame)[::hop]
+    rms = np.sqrt((frames ** 2).mean(axis=1))
+    hop_s = hop / SAMPLE_RATE
+
+    boundaries: list[float | None] = []
+    for cur, nxt in zip(intervals, intervals[1:]):
+        gap = nxt[0] - cur[1]
+        # 空隙超过 3s 是间奏而非换气：两句各自留余量、谁都不占间奏，
+        # 否则单句循环会把整段间奏播出来
+        if gap > 3.0:
+            boundaries.append(None)
+            continue
+        lo, hi = cur[1] + 0.05, nxt[0] - 0.05  # 两端留边，不切进词本体
+        if hi - lo < 0.1:  # 空隙太小，没有换气口可找
+            boundaries.append(None)
+            continue
+        a = min(int(lo / hop_s), len(rms) - 1)
+        b = min(int(hi / hop_s) + 1, len(rms))
+        if b <= a:
+            boundaries.append(None)
+            continue
+        boundaries.append(round((a + int(np.argmin(rms[a:b]))) * hop_s + 0.0125, 2))
+    return boundaries
+
+
+def _pad_and_clamp(intervals: list[list[float]],
+                   boundaries: list[float | None] | None = None) -> None:
+    """定每句的最终起止。就地修改。
+
+    首尾外扩小余量；相邻句有换气口低谷边界就直接共用该点，
+    否则余量冲突时取中点平分，保证区间不重叠。
+    """
     padded = [[max(s - 0.1, 0.0), max(e + 0.15, s + 0.3)] for s, e in intervals]
     for i in range(len(padded) - 1):
-        if padded[i][1] > padded[i + 1][0]:
+        b = boundaries[i] if boundaries else None
+        if b is not None:
+            padded[i][1] = padded[i + 1][0] = b
+        elif padded[i][1] > padded[i + 1][0]:
             mid = (padded[i][1] + padded[i + 1][0]) / 2
             padded[i][1] = padded[i + 1][0] = mid
     for i, iv in enumerate(padded):
