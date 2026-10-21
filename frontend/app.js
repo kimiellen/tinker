@@ -399,9 +399,15 @@ function jumpToLine(i) {
 function stepLine(d) {
   if (!learnSong) return;
   const lines = learnSong.lines;
-  currentLine = Math.max(0, Math.min(currentLine + d, lines.length - 1));
-  activeLine = currentLine;
-  player.currentTime = lines[currentLine].start;
+  if (d < 0 && currentLine === 0) {
+    // 第一句再往前是前奏：回到 0，不高亮任何句
+    activeLine = -1;
+    player.currentTime = 0;
+  } else {
+    currentLine = Math.max(0, Math.min(currentLine + d, lines.length - 1));
+    activeLine = currentLine;
+    player.currentTime = lines[currentLine].start;
+  }
   updateLearnUI();
   scrollLineIntoView();
 }
@@ -465,15 +471,15 @@ function toggleLearnPlay() {
     player.pause();
     linePlaying = false;
     updateLearnUI();
-  } else if (player.currentTime > 0 && !player.ended) {
-    // 从暂停点继续连播，不跳回句首
-    player.playbackRate = SPEEDS[speedIdx];
-    player.play();
-    linePlaying = true;
-    updateLearnUI();
-  } else {
-    jumpToLine(currentLine); // 还没开播或已播完：从当前句起播
+    return;
   }
+  // 从当前位置继续：刚打开是 0（前奏一起播出来），暂停后是暂停点；
+  // 整首播完了则从头再来（同样含前奏）
+  if (player.ended) player.currentTime = 0;
+  player.playbackRate = SPEEDS[speedIdx];
+  player.play();
+  linePlaying = true;
+  updateLearnUI();
 }
 function toggleLoop() {
   loopOne = !loopOne;
