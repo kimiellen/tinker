@@ -46,7 +46,7 @@ async function loadSongs() {
     const btn = item.querySelector(".song-play");
     btn.onclick = (e) => {
       e.stopPropagation();
-      togglePlay(song, item, btn);
+      toggleLibraryPlay(song, item, btn);
     };
     // 点卡片：分好句的去学习页，否则去贴歌词页
     item.onclick = () => openSong(song.id);
@@ -72,7 +72,7 @@ async function openSong(songId) {
   }
 }
 
-function togglePlay(song, item, btn) {
+function toggleLibraryPlay(song, item, btn) {
   if (currentAudio && currentAudio.btn === btn) {
     currentAudio.audio.pause();
     return;
