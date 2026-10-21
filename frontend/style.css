@@ -119,6 +119,14 @@ dialog input:focus { outline: none; border-color: var(--teal); }
 .line:hover { border-color: var(--teal-soft); }
 .line.playing { border-color: var(--teal); background: var(--teal-soft); }
 .line-en { font-size: 24px; font-weight: bold; line-height: 1.5; }
+.line-zh { font-size: 15px; color: var(--ink-soft); margin-top: 6px; }
+/* 连读 ⌒ 与 吞音标注（与 UI 定稿一致） */
+.liaison { border-bottom: 3px solid var(--coral); border-radius: 2px; padding-bottom: 1px; }
+.swallow { color: #C9BFB4; text-decoration: line-through; text-decoration-color: var(--coral); }
+.tip-icons { margin-top: 8px; font-size: 13px; display: flex; gap: 14px; }
+.tip-icons span { background: var(--coral-soft); color: var(--coral); border-radius: 8px; padding: 2px 8px; font-weight: bold; }
+.legend { font-size: 13px; color: var(--ink-soft); margin: 4px 0 16px; }
+.legend b { color: var(--coral); }
 .line-num {
   display: inline-flex; width: 28px; height: 28px; border-radius: 50%;
   background: var(--purple); color: #fff; font-size: 14px; font-weight: bold;

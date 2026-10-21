@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner
+from . import aligner, annotate, llm
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
 
@@ -73,10 +73,12 @@ def song_detail(song_id: str) -> Song:
 def set_lyrics(song_id: str, req: LyricsRequest) -> Song:
     song = _get_song(song_id)
     song.lyrics = req.text.strip()
-    # 歌词变了，旧的对齐结果作废
+    # 歌词变了，旧的对齐与标注结果作废
     song.lines = None
     song.align_status = "none"
     song.align_error = None
+    song.annotate_status = "none"
+    song.annotate_error = None
     store.update(song)
     return song
 
@@ -102,9 +104,40 @@ def _run_align(song_id: str) -> None:
         words = aligner.transcribe_words(RECORDINGS_DIR / song.audio_file)
         song.lines = aligner.align_lyrics(song.lyrics, words)
         song.align_status = "done"
+        # 重新分句后，旧的翻译标注属于旧的 lines，一并作废
+        song.annotate_status = "none"
+        song.annotate_error = None
     except Exception as e:  # noqa: BLE001 —— 任何失败都要落到状态里让前端能展示
         song.align_status = "error"
         song.align_error = str(e)
+    store.update(song)
+
+
+@app.post("/api/songs/{song_id}/annotate", status_code=202)
+def start_annotate(song_id: str) -> dict:
+    song = _get_song(song_id)
+    if not song.lines:
+        raise HTTPException(status_code=400, detail="先完成分句再标注")
+    if song.annotate_status == "running":
+        raise HTTPException(status_code=409, detail="正在标注中")
+    if not llm.configured():
+        raise HTTPException(status_code=400, detail="没有配置 LLM API key（设置环境变量 TINKER_LLM_API_KEY）")
+    song.annotate_status = "running"
+    song.annotate_error = None
+    store.update(song)
+    # LLM 调用要几十秒，与分句一样放后台线程
+    threading.Thread(target=_run_annotate, args=(song_id,), daemon=True).start()
+    return {"status": "running"}
+
+
+def _run_annotate(song_id: str) -> None:
+    song = store.get(song_id)
+    try:
+        annotate.annotate_lines(song.lines)
+        song.annotate_status = "done"
+    except Exception as e:  # noqa: BLE001 —— 同上，失败要能让前端展示
+        song.annotate_status = "error"
+        song.annotate_error = str(e)
     store.update(song)
 
 

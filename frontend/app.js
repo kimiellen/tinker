@@ -225,19 +225,35 @@ $("btn-align").onclick = async () => {
 
 function startAlignPolling() {
   stopAlignPolling();
-  $("align-status").hidden = false;
   $("btn-align").disabled = true;
+  let phase = "align";
+  $("align-status").textContent = "正在一句一句听歌……🎵 可能要等一两分钟，别走开";
+  $("align-status").hidden = false;
   alignTimer = setInterval(async () => {
     const song = await (await fetch(`/api/songs/${lyricsSong.id}`)).json();
-    if (song.align_status === "done") {
-      stopAlignPolling();
-      openLearn(song);
-    } else if (song.align_status === "error") {
-      stopAlignPolling();
-      $("lyrics-error").textContent = "😥 分句失败了：" + (song.align_error || "未知原因");
-      $("lyrics-error").hidden = false;
+    if (phase === "align") {
+      if (song.align_status === "done") {
+        phase = "annotate";
+        // 分句完成，自动翻译+标注；标注失败不挡路，没有翻译也能学
+        const res = await fetch(`/api/songs/${song.id}/annotate`, { method: "POST" });
+        if (!res.ok) { stopAlignPolling(); openLearn(song); return; }
+        $("align-status").textContent = "分好句啦！正在翻译和标注发音技巧……✍️";
+      } else if (song.align_status === "error") {
+        stopAlignPolling();
+        showLyricsError("分句失败了：" + (song.align_error || "未知原因"));
+      }
+    } else {
+      if (song.annotate_status === "done" || song.annotate_status === "error") {
+        stopAlignPolling();
+        openLearn(song);
+      }
     }
   }, 2000);
+}
+
+function showLyricsError(msg) {
+  $("lyrics-error").textContent = "😥 " + msg;
+  $("lyrics-error").hidden = false;
 }
 
 function stopAlignPolling() {
@@ -257,6 +273,53 @@ let loopOne = false;
 let speedIdx = 0;
 let linePlaying = false;
 
+// 把一句歌词渲染成带连读/吞音高亮的 HTML（所有原文先转义，再包高亮 span）
+const _normWord = (w) => w.toLowerCase().replace(/[^a-z0-9']+/g, "");
+const _esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function renderLineHtml(line) {
+  const words = line.text.split(/\s+/);
+
+  // 吞音：按词匹配（取第一个未占用的同名词），记录要划掉的字母
+  const swallowAt = {};
+  for (const s of line.swallow || []) {
+    const i = words.findIndex((w, j) => !(j in swallowAt) && _normWord(w) === _normWord(s.word));
+    if (i >= 0) swallowAt[i] = s.letters;
+  }
+  // 连读：相邻词对匹配，记下左词下标
+  const liaisonFrom = new Set();
+  for (const pair of line.liaison || []) {
+    const [a, b] = pair;
+    for (let i = 0; i < words.length - 1; i++) {
+      if (!liaisonFrom.has(i) && _normWord(words[i]) === _normWord(a) && _normWord(words[i + 1]) === _normWord(b)) {
+        liaisonFrom.add(i);
+        break;
+      }
+    }
+  }
+
+  const wordHtml = words.map((w, i) => {
+    if (!(i in swallowAt)) return _esc(w);
+    const letters = swallowAt[i];
+    const pos = w.toLowerCase().indexOf(letters.toLowerCase());
+    if (pos < 0) return _esc(w);
+    return _esc(w.slice(0, pos))
+      + '<span class="swallow">' + _esc(w.slice(pos, pos + letters.length)) + "</span>"
+      + _esc(w.slice(pos + letters.length));
+  });
+
+  let out = "";
+  for (let i = 0; i < words.length; i++) {
+    if (liaisonFrom.has(i) && i + 1 < words.length) {
+      out += '<span class="liaison">' + wordHtml[i] + " " + wordHtml[i + 1] + "</span> ";
+      i++; // 右词已并入连读 span
+    } else {
+      out += wordHtml[i] + " ";
+    }
+  }
+  return out.trim();
+}
+
 function openLearn(song) {
   learnSong = song;
   $("learn-song-title").textContent = song.title;
@@ -265,8 +328,33 @@ function openLearn(song) {
   lineEls = song.lines.map((line) => {
     const el = document.createElement("div");
     el.className = "line";
-    el.innerHTML = `<div class="line-en"><span class="line-num">${line.index}</span></div>`;
-    el.querySelector(".line-en").appendChild(document.createTextNode(line.text));
+    const en = document.createElement("div");
+    en.className = "line-en";
+    const num = document.createElement("span");
+    num.className = "line-num";
+    num.textContent = line.index;
+    en.appendChild(num);
+    en.insertAdjacentHTML("beforeend", renderLineHtml(line)); // 内部已转义
+    el.appendChild(en);
+    if (line.zh) {
+      const zh = document.createElement("div");
+      zh.className = "line-zh";
+      zh.textContent = line.zh; // textContent 防注入
+      el.appendChild(zh);
+    }
+    const tips = [];
+    if (line.liaison && line.liaison.length) tips.push("︶ 连读");
+    if (line.swallow && line.swallow.length) tips.push("✂ 吞音 " + line.swallow.map(s => s.letters).join(" "));
+    if (tips.length) {
+      const tip = document.createElement("div");
+      tip.className = "tip-icons";
+      for (const t of tips) {
+        const s = document.createElement("span");
+        s.textContent = t;
+        tip.appendChild(s);
+      }
+      el.appendChild(tip);
+    }
     el.onclick = () => playLine(line.index - 1);
     list.appendChild(el);
     return el;
