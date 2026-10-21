@@ -15,8 +15,34 @@ LYRICS = "Twinkle, twinkle, little star\nHow I wonder what you are"
 
 def test_parse_lyrics_drops_blank_lines_and_normalizes():
     parsed = parse_lyrics("Twinkle, twinkle!\n\n  \nHow's it")
-    assert parsed == [("Twinkle, twinkle!", ["twinkle", "twinkle"]),
-                      ("How's it", ["hows", "it"])]
+    assert parsed == [("Twinkle, twinkle!", "", ["twinkle", "twinkle"]),
+                      ("How's it", "", ["hows", "it"])]
+
+
+def test_parse_bilingual_attaches_zh_to_previous_en_line():
+    parsed = parse_lyrics(
+        "Twinkle, twinkle, little star\n"
+        "一闪一闪小星星\n"
+        "How I wonder what you are\n"
+        "我多想知道你是什么\n"
+        "Up above the world so high"  # 没贴翻译：留空
+    )
+    assert parsed[0][:2] == ("Twinkle, twinkle, little star", "一闪一闪小星星")
+    assert parsed[1][:2] == ("How I wonder what you are", "我多想知道你是什么")
+    assert parsed[2][:2] == ("Up above the world so high", "")
+
+
+def test_parse_bilingual_orphan_and_consecutive_zh():
+    # 开头孤立的中文行没有归属，忽略；连续中文行拼进同一句
+    parsed = parse_lyrics("主题曲\nTwinkle twinkle\n小星星\n亮晶晶")
+    assert parsed == [("Twinkle twinkle", "小星星 亮晶晶", ["twinkle", "twinkle"])]
+
+
+def test_align_carries_zh_into_lines():
+    words = make_words("twinkle twinkle little star how i wonder what you are")
+    lines = align_lyrics("Twinkle, twinkle, little star\n一闪一闪小星星\nHow I wonder what you are", words)
+    assert lines[0]["zh"] == "一闪一闪小星星"
+    assert lines[1]["zh"] == ""
 
 
 def test_align_exact_match():

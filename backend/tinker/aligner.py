@@ -43,6 +43,10 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
+# 汉字（含扩展 A 区）：判定"这一行是中文翻译"用
+_CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+
+
 def _get_model():
     global _model
     with _model_lock:
@@ -75,18 +79,30 @@ def transcribe_words(audio: np.ndarray) -> list[Word]:
     return words
 
 
-def parse_lyrics(lyrics: str) -> list[tuple[str, list[str]]]:
-    """歌词文本 -> [(原文行, 规范化词序列)]，丢弃空行。"""
-    parsed = []
+def parse_lyrics(lyrics: str) -> list[tuple[str, str, list[str]]]:
+    """歌词文本 -> [(英文行, 中文翻译, 规范化词序列)]，丢弃空行。
+
+    中英混贴（网易云等平台复制歌词的格式）：含汉字的行是它上面那句英文
+    的翻译；连续多行中文拼进同一句；开头孤立的中文行没有归属，忽略。
+    """
+    parsed: list[tuple[str, str, list[str]]] = []
     for raw in lyrics.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        if _CJK.search(raw):
+            if parsed:
+                en, zh, tokens = parsed[-1]
+                parsed[-1] = (en, f"{zh} {raw}".strip(), tokens)
+            continue
         tokens = [t for t in (_norm(w) for w in raw.split()) if t]
         if tokens:
-            parsed.append((raw.strip(), tokens))
+            parsed.append((raw, "", tokens))
     return parsed
 
 
 def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None) -> list[dict]:
-    """产出逐句时间区间 [{index, text, start, end}]，按行号顺序、区间互不重叠。
+    """产出逐句时间区间 [{index, text, zh, start, end}]，按行号顺序、区间互不重叠。
 
     audio（16k 单声道）用于把相邻句的边界移到换气口的能量最低点；
     不传则退化为纯文本匹配 + 中点切分（测试与离线推演用）。
@@ -99,7 +115,7 @@ def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None
 
     lyric_tokens: list[str] = []
     token_line: list[int] = []  # 每个歌词词属于第几行
-    for i, (_, tokens) in enumerate(parsed):
+    for i, (_, _, tokens) in enumerate(parsed):
         lyric_tokens.extend(tokens)
         token_line.extend([i] * len(tokens))
 
@@ -124,8 +140,8 @@ def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None
     _pad_and_clamp(intervals, boundaries)
 
     return [
-        {"index": i + 1, "text": raw, "start": round(iv[0], 2), "end": round(iv[1], 2)}
-        for i, ((raw, _), iv) in enumerate(zip(parsed, intervals))
+        {"index": i + 1, "text": en, "zh": zh, "start": round(iv[0], 2), "end": round(iv[1], 2)}
+        for i, ((en, zh, _), iv) in enumerate(zip(parsed, intervals))
     ]
 
 

@@ -228,27 +228,18 @@ $("btn-align").onclick = async () => {
 function startAlignPolling() {
   stopAlignPolling();
   $("btn-align").disabled = true;
-  let phase = "align";
   $("align-status").textContent = "正在一句一句听歌……🎵 可能要等一两分钟，别走开";
   $("align-status").hidden = false;
   alignTimer = setInterval(async () => {
     const song = await (await fetch(`/api/songs/${lyricsSong.id}`)).json();
-    if (phase === "align") {
-      if (song.align_status === "done") {
-        phase = "annotate";
-        // 分句完成，自动翻译+标注；标注失败不挡路，没有翻译也能学
-        const res = await fetch(`/api/songs/${song.id}/annotate`, { method: "POST" });
-        if (!res.ok) { stopAlignPolling(); openLearn(song); return; }
-        $("align-status").textContent = "分好句啦！正在翻译和标注发音技巧……✍️";
-      } else if (song.align_status === "error") {
-        stopAlignPolling();
-        showLyricsError("分句失败了：" + (song.align_error || "未知原因"));
-      }
-    } else {
-      if (song.annotate_status === "done" || song.annotate_status === "error") {
-        stopAlignPolling();
-        openLearn(song);
-      }
+    if (song.align_status === "done") {
+      stopAlignPolling();
+      // 分句完成，同步跑发音标注（本地规则引擎，毫秒级）；失败不挡路，没有标注也能学
+      await fetch(`/api/songs/${song.id}/annotate`, { method: "POST" });
+      openLearn(await (await fetch(`/api/songs/${song.id}`)).json());
+    } else if (song.align_status === "error") {
+      stopAlignPolling();
+      showLyricsError("分句失败了：" + (song.align_error || "未知原因"));
     }
   }, 2000);
 }

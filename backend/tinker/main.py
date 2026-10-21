@@ -120,31 +120,17 @@ def _run_align(song_id: str) -> None:
     store.update(song)
 
 
-@app.post("/api/songs/{song_id}/annotate", status_code=202)
-def start_annotate(song_id: str) -> dict:
+@app.post("/api/songs/{song_id}/annotate")
+def annotate_song(song_id: str) -> dict:
     song = _get_song(song_id)
     if not song.lines:
         raise HTTPException(status_code=400, detail="先完成分句再标注")
-    if song.annotate_status == "running":
-        raise HTTPException(status_code=409, detail="正在标注中")
-    # 连读/吞音是本地规则引擎，无 key 也能出标注（翻译留空，配 key 后重跑即补上）
-    song.annotate_status = "running"
+    # 连读/吞音是本地规则引擎，毫秒级完成，同步执行
+    annotate.annotate_lines(song.lines)
+    song.annotate_status = "done"
     song.annotate_error = None
     store.update(song)
-    # LLM 调用要几十秒，与分句一样放后台线程
-    threading.Thread(target=_run_annotate, args=(song_id,), daemon=True).start()
-    return {"status": "running"}
-
-
-def _run_annotate(song_id: str) -> None:
-    song = store.get(song_id)
-    try:
-        annotate.annotate_lines(song.lines)
-        song.annotate_status = "done"
-    except Exception as e:  # noqa: BLE001 —— 同上，失败要能让前端展示
-        song.annotate_status = "error"
-        song.annotate_error = str(e)
-    store.update(song)
+    return {"status": "done"}
 
 
 # ---------- 跟唱评估 ----------
