@@ -82,11 +82,17 @@
   </div>
 
   <div class="player-bar">
-    <button class="pbtn" id="btn-prev" title="上一句">⏮</button>
-    <button class="pbtn main" id="btn-play" title="播放本句">▶</button>
-    <button class="pbtn" id="btn-next" title="下一句">⏭</button>
-    <button class="pbtn" id="btn-loop" title="单句循环">🔁</button>
-    <button class="pbtn" id="btn-speed" title="变速">🐢</button>
+    <button class="pbtn" id="btn-prev" title="上一句（←）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"/><path d="M20 5.5v13L9.5 12z" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button class="pbtn main" id="btn-play" title="播放 / 暂停（空格）"></button>
+    <button class="pbtn" id="btn-next" title="下一句（→）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"/><path d="M4 5.5v13L14.5 12z" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button class="pbtn" id="btn-loop" title="单句循环（↑）：点亮后反复唱这一句">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2.5l3.5 3.5L17 9.5"/><path d="M4 11V9.5A3.5 3.5 0 017.5 6h13"/><path d="M7 21.5L3.5 18 7 14.5"/><path d="M20 13v1.5a3.5 3.5 0 01-3.5 3.5h-13"/></svg>
+    </button>
+    <button class="pbtn" id="btn-speed" title="变速（↓）">🐢</button>
     <span class="speed" id="speed-label">1x</span>
   </div>
 </section>

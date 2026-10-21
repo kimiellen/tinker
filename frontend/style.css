@@ -143,9 +143,11 @@ dialog input:focus { outline: none; border-color: var(--teal); }
 .pbtn {
   width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
   font-size: 24px; display: flex; align-items: center; justify-content: center;
-  background: var(--yellow-soft);
+  background: var(--yellow-soft); color: var(--ink);
 }
+.pbtn svg { width: 26px; height: 26px; }
 .pbtn.main { width: 68px; height: 68px; background: var(--coral); color: #fff; font-size: 28px; }
+.pbtn.main svg { width: 32px; height: 32px; }
 .pbtn.on { background: var(--teal); color: #fff; }
 .speed { font-size: 14px; font-weight: bold; color: var(--ink); width: 48px; text-align: center; }
 

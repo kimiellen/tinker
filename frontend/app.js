@@ -364,6 +364,7 @@ function openLearn(song) {
   player.src = `/api/songs/${song.id}/audio`;
   currentLine = 0;
   linePlaying = false;
+  updateLearnUI(); // 初始化播放按钮图标
   show("learn");
 }
 
@@ -377,14 +378,20 @@ function playLine(i) {
   updateLearnUI();
 }
 
+// 播放/暂停图标（SVG，和内嵌的其他按钮图标配套）
+const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15L20 12z" fill="currentColor"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>';
+
 player.addEventListener("timeupdate", () => {
   if (!linePlaying || !learnSong) return;
   const line = learnSong.lines[currentLine];
   if (player.currentTime >= line.end) {
     if (loopOne) {
       player.currentTime = line.start; // 回到句首，实现单句循环
+    } else if (currentLine < learnSong.lines.length - 1) {
+      playLine(currentLine + 1); // 默认顺序连播：自动接下一句
     } else {
-      player.pause();
+      player.pause(); // 唱到最后一句就停
       linePlaying = false;
       updateLearnUI();
     }
@@ -393,7 +400,7 @@ player.addEventListener("timeupdate", () => {
 
 function updateLearnUI() {
   lineEls.forEach((el, i) => el.classList.toggle("playing", i === currentLine && linePlaying));
-  $("btn-play").textContent = linePlaying ? "⏸" : "▶";
+  $("btn-play").innerHTML = linePlaying ? ICON_PAUSE : ICON_PLAY;
 }
 
 function stopLearning() {
@@ -404,7 +411,7 @@ function stopLearning() {
 
 $("btn-learn-back").onclick = () => { show("library"); loadSongs(); };
 
-$("btn-play").onclick = () => {
+function togglePlay() {
   if (linePlaying) {
     player.pause();
     linePlaying = false;
@@ -412,18 +419,39 @@ $("btn-play").onclick = () => {
   } else {
     playLine(currentLine);
   }
-};
-$("btn-prev").onclick = () => playLine(currentLine - 1);
-$("btn-next").onclick = () => playLine(currentLine + 1);
-$("btn-loop").onclick = () => {
+}
+function toggleLoop() {
   loopOne = !loopOne;
   $("btn-loop").classList.toggle("on", loopOne);
-};
-$("btn-speed").onclick = () => {
+}
+function cycleSpeed() {
   speedIdx = (speedIdx + 1) % SPEEDS.length;
   player.playbackRate = SPEEDS[speedIdx];
   $("speed-label").textContent = SPEEDS[speedIdx] + "x";
-};
+}
+
+$("btn-play").onclick = togglePlay;
+$("btn-prev").onclick = () => playLine(currentLine - 1);
+$("btn-next").onclick = () => playLine(currentLine + 1);
+$("btn-loop").onclick = toggleLoop;
+$("btn-speed").onclick = cycleSpeed;
+
+// 学习页快捷键：空格播放/暂停，←→切句，↑单句循环，↓变速
+document.addEventListener("keydown", (e) => {
+  if (!screens.learn.classList.contains("active") || !learnSong) return;
+  const actions = {
+    " ": togglePlay,
+    ArrowLeft: () => playLine(currentLine - 1),
+    ArrowRight: () => playLine(currentLine + 1),
+    ArrowUp: toggleLoop,
+    ArrowDown: cycleSpeed,
+  };
+  const action = actions[e.key];
+  if (action) {
+    e.preventDefault(); // 挡住空格触发聚焦按钮、方向键滚动页面
+    action();
+  }
+});
 
 // ---------- 跟唱评估 ----------
 let mediaRecorder = null;
