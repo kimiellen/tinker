@@ -1,0 +1,6 @@
+# 运行期数据与本地工具，不入库
+data/
+.tools/
+backend/.venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tinker · 唱歌学英文</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 歌曲库 -->
+<section class="screen active" id="s1">
+  <h1>🎵 我的歌单</h1>
+  <p class="sub">录下电脑里正在播放的英文歌，一句一句学会它！</p>
+
+  <div class="center">
+    <button class="btn btn-big btn-coral" id="btn-new">🔴 录一首新歌</button>
+  </div>
+
+  <div id="song-list"></div>
+  <p class="empty-hint" id="empty-hint" hidden>还没有录过歌，点上面的按钮开始吧！</p>
+</section>
+
+<!-- 内录 -->
+<section class="screen" id="s2">
+  <div class="rec-wrap">
+    <h1>🎧 录制电脑里的歌</h1>
+    <p class="rec-hint">
+      ① 先在浏览器里打开网易云音乐，找到要学的歌<br>
+      ② 点下面的按钮开始录音，<b>看到波纹动画后</b>马上播放歌曲<br>
+      ③ 歌放完了，再点一次结束
+    </p>
+
+    <div class="rec-dot" id="rec-dot">🎙️</div>
+    <div class="rec-time" id="rec-time">00:00</div>
+
+    <div class="wave" id="rec-wave" hidden>
+      <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+    </div>
+
+    <p class="rec-hint" id="rec-status">准备好了就开始</p>
+    <button class="btn btn-big btn-coral" id="btn-rec-toggle">⏺ 开始录音</button>
+    <p class="error" id="rec-error" hidden></p>
+  </div>
+</section>
+
+<!-- 保存对话框 -->
+<dialog id="save-dialog">
+  <h2>🎉 录好啦！这首歌叫什么？</h2>
+  <input type="text" id="song-title" maxlength="100" placeholder="比如：Twinkle Twinkle Little Star">
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="btn-save-cancel">不要了</button>
+    <button class="btn btn-teal" id="btn-save-ok">保存</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

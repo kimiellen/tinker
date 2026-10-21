@@ -2,13 +2,14 @@
 
 事实源：[spec.md](spec.md) · UI 定稿：[ui-mockup.html](ui-mockup.html)（2026-10-21 用户确认）
 
-## M1：项目骨架 + 音频内录
+## M1：项目骨架 + 音频内录 ✅（2026-10-21 完成）
 
-- [ ] uv 初始化 FastAPI 后端项目，托管 `frontend/` 静态文件
-- [ ] 录音服务：PipeWire/PulseAudio monitor 内录系统输出，start/stop API，保存 wav 到 `data/recordings/`
-- [ ] 录音列表 API + 音频文件访问
-- [ ] 前端：歌曲库界面（按 UI 定稿 ①②），录新歌 → 录音中状态 → 完成入列表 → 浏览器内回放
-- [ ] **验证**：启动服务，实际录一段系统播放的音频，前端列表出现且可回放
+- [x] uv 初始化 FastAPI 后端项目，托管 `frontend/` 静态文件
+- [x] 录音服务：PipeWire/PulseAudio monitor 内录系统输出，start/stop API，保存 wav 到 `data/recordings/`
+- [x] 录音列表 API + 音频文件访问
+- [x] 前端：歌曲库界面（按 UI 定稿 ①②），录新歌 → 录音中状态 → 完成入列表 → 浏览器内回放
+- [x] **验证**：启动服务，实际录一段系统播放的音频，前端列表出现且可回放
+  - 证据：播放 440Hz 测试音同时内录，录得文件主频 ≈434Hz、时长与播放一致、无残留进程；丢弃路径、400/404 错误路径均验证通过
 
 ## M2：歌词逐句对齐 + 逐句学习
 
