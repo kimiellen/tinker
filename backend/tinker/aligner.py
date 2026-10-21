@@ -17,8 +17,10 @@ from pathlib import Path
 
 from .audio import decode_audio_16k
 
-# 英文儿歌场景：small.en 精度足够，CPU int8 下一首 3 分钟的歌约半分钟
-MODEL_NAME = "small.en"
+# small.en 对口音重、伴奏吵的演唱会产生大面积幻觉（把前奏听成
+# "thank you so much for watching"），实测 medium.en 才能稳定转写真实人声；
+# CPU int8 下一首 3 分半的歌约 2~4 分钟，可接受。
+MODEL_NAME = "medium.en"
 
 _model = None
 _model_lock = threading.Lock()
@@ -53,7 +55,16 @@ def _get_model():
 def transcribe_words(audio_path: Path) -> list[Word]:
     """转写音频，返回规范化后的词级时间戳序列。"""
     model = _get_model()
-    segments, _ = model.transcribe(decode_audio_16k(audio_path), language="en", word_timestamps=True)
+    segments, _ = model.transcribe(
+        decode_audio_16k(audio_path),
+        language="en",
+        word_timestamps=True,
+        # 反幻觉：不带入上一段上下文（幻觉句会自我复制扩散），
+        # 超过 2s 的静音段重新开始（前奏/间奏里不再脑补歌词）。
+        # 注意不能用 vad_filter——它会把带伴奏的歌声误判为非语音而整段丢弃。
+        condition_on_previous_text=False,
+        hallucination_silence_threshold=2.0,
+    )
     words = []
     for seg in segments:
         for w in seg.words or []:
@@ -113,7 +124,15 @@ def align_lyrics(lyrics: str, words: list[Word]) -> list[dict]:
 
 
 def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float) -> None:
-    """未匹配的连续行段：在前后已匹配行之间均匀分配时间。就地修改。"""
+    """未匹配的连续行段插值。就地修改。
+
+    - 中段：在前后已匹配行之间均匀分配时间
+    - 头部（前奏没歌词）：按已匹配行的典型句长从下一句起点向前倒推，
+      而不是从 0 均摊——否则整段前奏都会被算进前几行歌词
+    - 尾部：接在前一行后，每句给 3 秒的典型时长
+    """
+    matched_durations = sorted(iv[1] - iv[0] for iv in intervals if iv)
+    typical = matched_durations[len(matched_durations) // 2] if matched_durations else 3.0
     n = len(intervals)
     i = 0
     while i < n:
@@ -127,11 +146,17 @@ def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float)
         if j < n:
             next_start = intervals[j][0]
         else:
-            # 尾部整段缺失：接在前一行后，每句给 3 秒的典型时长
             next_start = max(prev_end + 3.0 * (j - i), last_word_end)
-        step = max(next_start - prev_end, 0.0) / (j - i)
-        for k in range(j - i):
-            intervals[i + k] = [prev_end + step * k, prev_end + step * (k + 1)]
+        if i == 0:
+            # 向前倒推：第 1 行终点贴着首个匹配行的起点，而不是从 0 开始
+            step = min(typical, next_start / (j - i)) if next_start > 0 else 0.0
+            for k in range(j - i):
+                start = max(next_start - step * (j - i - k), 0.0)
+                intervals[i + k] = [start, max(next_start - step * (j - i - k - 1), start)]
+        else:
+            step = max(next_start - prev_end, 0.0) / (j - i)
+            for k in range(j - i):
+                intervals[i + k] = [prev_end + step * k, prev_end + step * (k + 1)]
         i = j
 
 

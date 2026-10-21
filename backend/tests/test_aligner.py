@@ -41,13 +41,26 @@ def test_align_tolerates_transcription_noise():
 
 def test_align_interpolates_unmatched_line():
     lyrics = "la la la\nTwinkle twinkle little star\nHow I wonder what you are"
-    words = make_words("twinkle twinkle little star how i wonder what you are", start=3.0)
+    words = make_words("twinkle twinkle little star how i wonder what you are", start=6.0)
     lines = align_lyrics(lyrics, words)
-    # 第 1 行没匹配上：插在 [0, 第2行start) 之间
-    assert lines[0]["start"] == 0.0
-    assert lines[0]["end"] < lines[2]["start"]
-    assert lines[1]["start"] > 2.9  # 3.0 - 0.1 余量，再与插值行中点相接
+    # 第 1 行没匹配上：从第 2 行起点向前倒推一个典型句长（匹配行时长中位数 2.9s）。
+    # 前奏 6s 比典型句长长，第 1 行不得从 0 摊满整个前奏
+    assert lines[0]["start"] == pytest.approx(6.0 - 2.9 - 0.1, abs=1e-6)
+    assert lines[0]["end"] <= lines[1]["start"]  # 终点贴着第 2 行
+    assert lines[1]["start"] > 5.9  # 6.0 - 0.1 余量，再与插值行中点相接
     assert lines[1]["end"] <= lines[2]["start"]  # 区间相接不重叠
+
+
+def test_align_leading_gap_does_not_swallow_intro():
+    # 回归：20s 前奏里 whisper 一个歌词都没听到（或只听到幻觉词）时，
+    # 头部未匹配行不得从 0 均摊——前奏不是歌词（2026-10-21 Young for You 事故）
+    lyrics = "hmm hmm hmm\none two\nthree four"
+    words = make_words("one two three four", start=20.0)
+    lines = align_lyrics(lyrics, words)
+    # 匹配行典型句长约 0.9s：第 1 行应倒推为 [19.0-0.1, 20.0] 附近，而不是 [0, 20]
+    assert lines[0]["end"] <= lines[1]["start"]
+    assert lines[0]["start"] > 18.0
+    assert lines[0]["end"] - lines[0]["start"] < 2.0
 
 
 def test_align_no_overlap_raises():
