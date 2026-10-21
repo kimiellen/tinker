@@ -376,6 +376,19 @@ function playLine(i) {
   player.play();
   linePlaying = true;
   updateLearnUI();
+  scrollLineIntoView();
+}
+
+// 把当前句滚到屏幕中部；开头几句居中所需滚动量为负，浏览器自动钳制为不滚，
+// 已经在屏幕中段时也不滚，避免连播/点句时页面小幅抖动
+function scrollLineIntoView() {
+  const el = lineEls[currentLine];
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const offCenter = Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2);
+  if (offCenter > window.innerHeight * 0.2) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 }
 
 // 播放/暂停图标（SVG，和内嵌的其他按钮图标配套）
