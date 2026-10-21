@@ -5,6 +5,7 @@ description = "英文歌学唱应用：内录、逐句学习、跟唱评估"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "faster-whisper>=1.2.1",
     "uvicorn>=0.30",
 ]
 
@@ -13,3 +14,6 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

@@ -44,6 +44,46 @@
   </div>
 </section>
 
+<!-- 贴歌词 -->
+<section class="screen" id="s3">
+  <div class="learn-head">
+    <button class="btn btn-ghost" id="btn-lyrics-back">← 返回</button>
+    <div>
+      <h1 class="head-title" id="lyrics-song-title"></h1>
+      <p class="sub">把歌词贴进来，一句一行</p>
+    </div>
+  </div>
+  <textarea id="lyrics-text" rows="10"
+    placeholder="Twinkle, twinkle, little star&#10;How I wonder what you are&#10;……"></textarea>
+  <p class="error" id="lyrics-error" hidden></p>
+  <div class="center">
+    <button class="btn btn-big btn-teal" id="btn-align">✨ 保存并开始分句</button>
+  </div>
+  <p class="rec-hint" id="align-status" hidden>正在一句一句听歌……🎵 可能要等一两分钟，别走开</p>
+</section>
+
+<!-- 逐句学习 -->
+<section class="screen" id="s4">
+  <div class="learn-head">
+    <button class="btn btn-ghost" id="btn-learn-back">← 返回</button>
+    <div>
+      <h1 class="head-title" id="learn-song-title"></h1>
+      <p class="sub">点一句，听一句；跟着唱会它</p>
+    </div>
+  </div>
+
+  <div id="line-list"></div>
+
+  <div class="player-bar">
+    <button class="pbtn" id="btn-prev" title="上一句">⏮</button>
+    <button class="pbtn main" id="btn-play" title="播放本句">▶</button>
+    <button class="pbtn" id="btn-next" title="下一句">⏭</button>
+    <button class="pbtn" id="btn-loop" title="单句循环">🔁</button>
+    <button class="pbtn" id="btn-speed" title="变速">🐢</button>
+    <span class="speed" id="speed-label">1x</span>
+  </div>
+</section>
+
 <!-- 保存对话框 -->
 <dialog id="save-dialog">
   <h2>🎉 录好啦！这首歌叫什么？</h2>

@@ -18,6 +18,10 @@ class Song:
     audio_file: str        # wav 文件名
     duration: float
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    lyrics: str | None = None            # 用户粘贴的歌词原文
+    lines: list[dict] | None = None      # 对齐产出的逐句时间区间 [{index, text, start, end}]
+    align_status: str = "none"           # none | running | done | error
+    align_error: str | None = None
 
 
 class SongStore:
@@ -41,6 +45,10 @@ class SongStore:
         with self._lock:
             self._songs[song.id] = song
             self._flush()
+
+    def update(self, song: Song) -> None:
+        # 与 add 同一条路，语义上强调"改已有歌曲"
+        self.add(song)
 
     def get(self, song_id: str) -> Song | None:
         return self._songs.get(song_id)

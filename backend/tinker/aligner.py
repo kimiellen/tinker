@@ -1,0 +1,162 @@
+"""歌词逐句对齐：faster-whisper 词级时间戳 + 歌词文本匹配。
+
+模型是进程内单例、懒加载——加载要几秒且占内存，不能每次对齐都新建。
+
+对齐策略：把歌词各行与 whisper 转写结果都拆成规范化词序列（小写、仅字母
+数字），用 difflib.SequenceMatcher 做整体匹配；每行取首个/末个匹配词的
+时间戳作为该句时间区间。没匹配上的行（转写漏词、纯哼唱等）按相邻已匹配
+行的时间线性插值，保证每一句都可点播。
+"""
+from __future__ import annotations
+
+import difflib
+import re
+import subprocess
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+# 英文儿歌场景：small.en 精度足够，CPU int8 下一首 3 分钟的歌约半分钟
+MODEL_NAME = "small.en"
+
+_model = None
+_model_lock = threading.Lock()
+
+
+class AlignError(Exception):
+    """对齐失败（音频里听不出人声等），message 面向用户。"""
+
+
+@dataclass
+class Word:
+    text: str  # 规范化后的词
+    start: float
+    end: float
+
+
+def _norm(text: str) -> str:
+    """小写并去掉一切非字母数字，让 Twinkle,/twinkle 与 don't/dont 都能对上。"""
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _get_model():
+    global _model
+    with _model_lock:
+        if _model is None:
+            from faster_whisper import WhisperModel
+
+            _model = WhisperModel(MODEL_NAME, device="cpu", compute_type="int8")
+    return _model
+
+
+def _decode_audio_16k(audio_path: Path):
+    """用 ffmpeg 解码为 16kHz 单声道 float32，绕开 PyAV。
+
+    faster-whisper 1.2.x 的 av.open(metadata_errors=...) 与 av>=15 不兼容，
+    而旧版 av 在 Python 3.14 上没有预编译 wheel；录音本来就是 wav，
+    让系统 ffmpeg（项目已有的依赖工具）解码最省事。
+    """
+    out = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(audio_path),
+         "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+        capture_output=True, check=True,
+    )
+    return np.frombuffer(out.stdout, dtype=np.float32)
+
+
+def transcribe_words(audio_path: Path) -> list[Word]:
+    """转写音频，返回规范化后的词级时间戳序列。"""
+    model = _get_model()
+    segments, _ = model.transcribe(_decode_audio_16k(audio_path), language="en", word_timestamps=True)
+    words = []
+    for seg in segments:
+        for w in seg.words or []:
+            norm = _norm(w.word)
+            if norm:
+                words.append(Word(norm, round(w.start, 2), round(w.end, 2)))
+    return words
+
+
+def parse_lyrics(lyrics: str) -> list[tuple[str, list[str]]]:
+    """歌词文本 -> [(原文行, 规范化词序列)]，丢弃空行。"""
+    parsed = []
+    for raw in lyrics.splitlines():
+        tokens = [t for t in (_norm(w) for w in raw.split()) if t]
+        if tokens:
+            parsed.append((raw.strip(), tokens))
+    return parsed
+
+
+def align_lyrics(lyrics: str, words: list[Word]) -> list[dict]:
+    """产出逐句时间区间 [{index, text, start, end}]，按行号顺序、区间互不重叠。"""
+    parsed = parse_lyrics(lyrics)
+    if not parsed:
+        raise AlignError("歌词是空的")
+    if not words:
+        raise AlignError("没有在录音里听到歌声，换一段有歌声的录音试试")
+
+    lyric_tokens: list[str] = []
+    token_line: list[int] = []  # 每个歌词词属于第几行
+    for i, (_, tokens) in enumerate(parsed):
+        lyric_tokens.extend(tokens)
+        token_line.extend([i] * len(tokens))
+
+    # 整体匹配：matching_blocks 在两个序列上都是单调的，所以区间天然有序
+    matcher = difflib.SequenceMatcher(None, lyric_tokens, [w.text for w in words], autojunk=False)
+    matched: list[list[int]] = [[] for _ in parsed]  # 每行匹配到的 whisper 词下标
+    for block in matcher.get_matching_blocks():
+        for k in range(block.size):
+            matched[token_line[block.a + k]].append(block.b + k)
+
+    intervals: list[list[float] | None] = []
+    for hits in matched:
+        if hits:
+            intervals.append([words[hits[0]].start, words[hits[-1]].end])
+        else:
+            intervals.append(None)
+    if not any(intervals):
+        raise AlignError("歌词和录音对不上，检查一下贴的是不是这首歌的歌词")
+
+    _interpolate_gaps(intervals, words[-1].end)
+    _pad_and_clamp(intervals)
+
+    return [
+        {"index": i + 1, "text": raw, "start": round(iv[0], 2), "end": round(iv[1], 2)}
+        for i, ((raw, _), iv) in enumerate(zip(parsed, intervals))
+    ]
+
+
+def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float) -> None:
+    """未匹配的连续行段：在前后已匹配行之间均匀分配时间。就地修改。"""
+    n = len(intervals)
+    i = 0
+    while i < n:
+        if intervals[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < n and intervals[j] is None:
+            j += 1
+        prev_end = intervals[i - 1][1] if i > 0 else 0.0
+        if j < n:
+            next_start = intervals[j][0]
+        else:
+            # 尾部整段缺失：接在前一行后，每句给 3 秒的典型时长
+            next_start = max(prev_end + 3.0 * (j - i), last_word_end)
+        step = max(next_start - prev_end, 0.0) / (j - i)
+        for k in range(j - i):
+            intervals[i + k] = [prev_end + step * k, prev_end + step * (k + 1)]
+        i = j
+
+
+def _pad_and_clamp(intervals: list[list[float]]) -> None:
+    """每句前后留一点余量；与相邻句冲突时取中点平分，保证区间不重叠。就地修改。"""
+    padded = [[max(s - 0.1, 0.0), max(e + 0.15, s + 0.3)] for s, e in intervals]
+    for i in range(len(padded) - 1):
+        if padded[i][1] > padded[i + 1][0]:
+            mid = (padded[i][1] + padded[i + 1][0]) / 2
+            padded[i][1] = padded[i + 1][0] = mid
+    for i, iv in enumerate(padded):
+        intervals[i] = iv

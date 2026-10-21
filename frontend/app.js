@@ -1,10 +1,12 @@
-// tinker 前端逻辑（M1：歌曲库 + 内录）
+// tinker 前端逻辑（M1：歌曲库 + 内录；M2：歌词导入 + 逐句学习）
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 
-const screens = { library: $("s1"), record: $("s2") };
+const screens = { library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4") };
 function show(name) {
+  if (name !== "learn") stopLearning(); // 离开学习页就停声
+  if (name !== "lyrics") stopAlignPolling();
   for (const [key, el] of Object.entries(screens)) el.classList.toggle("active", key === name);
 }
 
@@ -34,7 +36,7 @@ async function loadSongs() {
       <div class="song-cover" style="background:${bg}">${emoji}</div>
       <div class="song-meta">
         <div class="song-name"></div>
-        <div class="song-info">${formatDuration(song.duration)} · ${song.created_at.replace("T", " ")}</div>
+        <div class="song-info">${songStatus(song)}</div>
       </div>
       <button class="song-play" title="播放">▶</button>`;
     item.querySelector(".song-name").textContent = song.title; // textContent 防注入
@@ -44,8 +46,28 @@ async function loadSongs() {
       e.stopPropagation();
       togglePlay(song, item, btn);
     };
+    // 点卡片：分好句的去学习页，否则去贴歌词页
+    item.onclick = () => openSong(song.id);
     list.appendChild(item);
   });
+}
+
+function songStatus(song) {
+  const base = formatDuration(song.duration);
+  if (song.align_status === "done" && song.lines) return `${base} · ${song.lines.length} 句，可以学啦 ✨`;
+  if (song.align_status === "running") return `${base} · 正在分句……`;
+  if (song.align_status === "error") return `${base} · 分句失败，点我重试`;
+  if (song.lyrics) return `${base} · 已有歌词，点我开始分句`;
+  return `${base} · 还没有歌词，点我贴歌词`;
+}
+
+async function openSong(songId) {
+  const song = await (await fetch(`/api/songs/${songId}`)).json();
+  if (song.align_status === "done" && song.lines) {
+    openLearn(song);
+  } else {
+    openLyrics(song);
+  }
 }
 
 function togglePlay(song, item, btn) {
@@ -70,7 +92,6 @@ function formatDuration(sec) {
   const m = Math.floor(sec / 60), s = Math.round(sec % 60);
   return `${m} 分 ${s} 秒`;
 }
-
 // ---------- 录音 ----------
 let recording = false;
 let timer = null;
@@ -159,5 +180,159 @@ function showError(msg) {
   $("rec-error").textContent = "😥 " + msg;
   $("rec-error").hidden = false;
 }
+
+// ---------- 贴歌词 + 分句 ----------
+let lyricsSong = null;
+let alignTimer = null;
+
+function openLyrics(song) {
+  lyricsSong = song;
+  $("lyrics-song-title").textContent = song.title;
+  $("lyrics-text").value = song.lyrics || "";
+  $("lyrics-error").hidden = true;
+  show("lyrics");
+  if (song.align_status === "running") startAlignPolling();
+}
+
+$("btn-lyrics-back").onclick = () => show("library");
+
+$("btn-align").onclick = async () => {
+  const text = $("lyrics-text").value.trim();
+  $("lyrics-error").hidden = true;
+  if (!text) {
+    $("lyrics-error").textContent = "😥 歌词还是空的，先贴歌词哦";
+    $("lyrics-error").hidden = false;
+    return;
+  }
+  const put = await fetch(`/api/songs/${lyricsSong.id}/lyrics`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!put.ok) {
+    $("lyrics-error").textContent = "😥 " + ((await put.json()).detail || "保存歌词失败");
+    $("lyrics-error").hidden = false;
+    return;
+  }
+  const res = await fetch(`/api/songs/${lyricsSong.id}/align`, { method: "POST" });
+  if (!res.ok && res.status !== 409) {
+    $("lyrics-error").textContent = "😥 " + ((await res.json()).detail || "启动分句失败");
+    $("lyrics-error").hidden = false;
+    return;
+  }
+  startAlignPolling();
+};
+
+function startAlignPolling() {
+  stopAlignPolling();
+  $("align-status").hidden = false;
+  $("btn-align").disabled = true;
+  alignTimer = setInterval(async () => {
+    const song = await (await fetch(`/api/songs/${lyricsSong.id}`)).json();
+    if (song.align_status === "done") {
+      stopAlignPolling();
+      openLearn(song);
+    } else if (song.align_status === "error") {
+      stopAlignPolling();
+      $("lyrics-error").textContent = "😥 分句失败了：" + (song.align_error || "未知原因");
+      $("lyrics-error").hidden = false;
+    }
+  }, 2000);
+}
+
+function stopAlignPolling() {
+  clearInterval(alignTimer);
+  alignTimer = null;
+  $("align-status").hidden = true;
+  $("btn-align").disabled = false;
+}
+
+// ---------- 逐句学习 ----------
+const SPEEDS = [1, 0.75, 0.5];
+const player = new Audio();
+let learnSong = null;
+let lineEls = [];
+let currentLine = 0;
+let loopOne = false;
+let speedIdx = 0;
+let linePlaying = false;
+
+function openLearn(song) {
+  learnSong = song;
+  $("learn-song-title").textContent = song.title;
+  const list = $("line-list");
+  list.innerHTML = "";
+  lineEls = song.lines.map((line) => {
+    const el = document.createElement("div");
+    el.className = "line";
+    el.innerHTML = `<div class="line-en"><span class="line-num">${line.index}</span></div>`;
+    el.querySelector(".line-en").appendChild(document.createTextNode(line.text));
+    el.onclick = () => playLine(line.index - 1);
+    list.appendChild(el);
+    return el;
+  });
+  player.src = `/api/songs/${song.id}/audio`;
+  currentLine = 0;
+  linePlaying = false;
+  show("learn");
+}
+
+function playLine(i) {
+  const lines = learnSong.lines;
+  currentLine = Math.max(0, Math.min(i, lines.length - 1));
+  player.playbackRate = SPEEDS[speedIdx];
+  player.currentTime = lines[currentLine].start;
+  player.play();
+  linePlaying = true;
+  updateLearnUI();
+}
+
+player.addEventListener("timeupdate", () => {
+  if (!linePlaying || !learnSong) return;
+  const line = learnSong.lines[currentLine];
+  if (player.currentTime >= line.end) {
+    if (loopOne) {
+      player.currentTime = line.start; // 回到句首，实现单句循环
+    } else {
+      player.pause();
+      linePlaying = false;
+      updateLearnUI();
+    }
+  }
+});
+
+function updateLearnUI() {
+  lineEls.forEach((el, i) => el.classList.toggle("playing", i === currentLine && linePlaying));
+  $("btn-play").textContent = linePlaying ? "⏸" : "▶";
+}
+
+function stopLearning() {
+  player.pause();
+  linePlaying = false;
+  if (learnSong) updateLearnUI();
+}
+
+$("btn-learn-back").onclick = () => { show("library"); loadSongs(); };
+
+$("btn-play").onclick = () => {
+  if (linePlaying) {
+    player.pause();
+    linePlaying = false;
+    updateLearnUI();
+  } else {
+    playLine(currentLine);
+  }
+};
+$("btn-prev").onclick = () => playLine(currentLine - 1);
+$("btn-next").onclick = () => playLine(currentLine + 1);
+$("btn-loop").onclick = () => {
+  loopOne = !loopOne;
+  $("btn-loop").classList.toggle("on", loopOne);
+};
+$("btn-speed").onclick = () => {
+  speedIdx = (speedIdx + 1) % SPEEDS.length;
+  player.playbackRate = SPEEDS[speedIdx];
+  $("speed-label").textContent = SPEEDS[speedIdx] + "x";
+};
 
 loadSongs();
