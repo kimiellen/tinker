@@ -238,5 +238,14 @@ def song_audio(song_id: str) -> FileResponse:
     return FileResponse(path, media_type="audio/wav")
 
 
-# 前端静态文件挂在最后，避免抢占 /api 路由
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+# 前端静态文件挂在最后，避免抢占 /api 路由。
+# 浏览器对无 Cache-Control 的静态文件会做启发式缓存，改了前端不生效（M9 用户踩到），
+# 强制 no-cache：每次都回源校验，命中 ETag 时 304，本地开销可忽略
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
