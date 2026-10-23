@@ -19,7 +19,7 @@ class Song:
     duration: float
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     lyrics: str | None = None            # 用户粘贴的歌词原文（可中英混贴，中文行是上一句的翻译）
-    lines: list[dict] | None = None      # 对齐产出的逐句时间区间 [{index, text, zh, start, end, liaison?, swallow?}]
+    lines: list[dict] | None = None      # 对齐产出的逐句时间区间 [{index, text, zh, start, end, marked?}]
     align_status: str = "none"           # none | running | done | error
     align_error: str | None = None
     annotate_status: str = "none"        # none | done（规则引擎毫秒级同步完成，无 running/error）

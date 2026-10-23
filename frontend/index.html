@@ -145,6 +145,20 @@
   </div>
 </dialog>
 
+<!-- 修改标注对话框 -->
+<dialog id="markup-dialog">
+  <h2 id="markup-title">✏️ 修改标注</h2>
+  <p class="dialog-text" id="markup-original"></p>
+  <textarea id="markup-text" rows="3" spellcheck="false"></textarea>
+  <p class="legend">连起来读：两词中间加 <b>-</b>（But-I） &nbsp;·&nbsp; 轻轻带过：用 <b>^</b> 包住字母（wan^t^）</p>
+  <p class="error" id="markup-error" hidden></p>
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="btn-markup-reset">↺ 恢复自动</button>
+    <button class="btn btn-ghost" id="btn-markup-cancel">取消</button>
+    <button class="btn btn-teal btn-md" id="btn-markup-save">保存</button>
+  </div>
+</dialog>
+
 <script src="app.js"></script>
 </body>
 </html>

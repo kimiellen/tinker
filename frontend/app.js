@@ -310,51 +310,73 @@ function lineAtTime(lines, t) {
   return -1;
 }
 
-// 把一句歌词渲染成带连读/吞音高亮的 HTML（所有原文先转义，再包高亮 span）
-const _normWord = (w) => w.toLowerCase().replace(/[^a-z0-9']+/g, "");
+// 把一句歌词渲染成带连读/吞音高亮的 HTML。
+// 数据形态（2026-10-23 spec-change）：每句只存 marked 标记文本——两词间的 -
+// 是连读（But-I），^ 包住的字母是吞音（wan^t^）；渲染时现场解析，原文先转义
 const _esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// 吞音：转义后的片段里把 ^...^ 包成划线灰字（^ 不属于转义字符，配对在转义后不变）
+const _renderWord = (w) => _esc(w).replace(/\^([^^]*)\^/g, '<span class="swallow">$1</span>');
+
+// 连读单元按 - 拆成非空词片段；空片段（孤立或连续的 -）丢弃
+const _splitTok = (tok) => tok.split("-").filter((w) => w !== "");
 
 function renderLineHtml(line) {
-  const words = line.text.split(/\s+/);
+  const marked = line.marked || line.text;
+  return marked.split(/\s+/).filter(Boolean).map((tok) => {
+    // 连读单元：- 连接的几个词一起包下划线，展示时还原成空格（与 UI 定稿一致）
+    const words = _splitTok(tok).map(_renderWord);
+    if (words.length > 1) return '<span class="liaison">' + words.join(" ") + "</span>";
+    return words[0] || ""; // 孤立的 - 没有可渲染内容
+  }).join(" ");
+}
 
-  // 吞音：按词匹配（取第一个未占用的同名词），记录要划掉的字母
-  const swallowAt = {};
-  for (const s of line.swallow || []) {
-    const i = words.findIndex((w, j) => !(j in swallowAt) && _normWord(w) === _normWord(s.word));
-    if (i >= 0) swallowAt[i] = s.letters;
-  }
-  // 连读：相邻词对匹配，记下左词下标
-  const liaisonFrom = new Set();
-  for (const pair of line.liaison || []) {
-    const [a, b] = pair;
-    for (let i = 0; i < words.length - 1; i++) {
-      if (!liaisonFrom.has(i) && _normWord(words[i]) === _normWord(a) && _normWord(words[i + 1]) === _normWord(b)) {
-        liaisonFrom.add(i);
-        break;
-      }
-    }
-  }
+// 提示标签从标记文本推导：有 - 连词即"连读"，^...^ 的内容即被吞的字母
+function lineTips(line) {
+  const marked = line.marked || "";
+  const tips = [];
+  if (marked.split(/\s+/).some((t) => _splitTok(t).length > 1)) tips.push("︶ 连读");
+  const swallowed = [...marked.matchAll(/\^([^^]+)\^/g)].map((m) => m[1]);
+  if (swallowed.length) tips.push("✂ 吞音 " + swallowed.join(" "));
+  return tips;
+}
 
-  const wordHtml = words.map((w, i) => {
-    if (!(i in swallowAt)) return _esc(w);
-    const letters = swallowAt[i];
-    const pos = w.toLowerCase().indexOf(letters.toLowerCase());
-    if (pos < 0) return _esc(w);
-    return _esc(w.slice(0, pos))
-      + '<span class="swallow">' + _esc(w.slice(pos, pos + letters.length)) + "</span>"
-      + _esc(w.slice(pos + letters.length));
-  });
-
-  let out = "";
-  for (let i = 0; i < words.length; i++) {
-    if (liaisonFrom.has(i) && i + 1 < words.length) {
-      out += '<span class="liaison">' + wordHtml[i] + " " + wordHtml[i + 1] + "</span> ";
-      i++; // 右词已并入连读 span
-    } else {
-      out += wordHtml[i] + " ";
-    }
+// 填充一句歌词卡片的内容（打开学习页与保存标注后就地重渲染共用）
+function fillLineEl(el, line) {
+  el.innerHTML = "";
+  const en = document.createElement("div");
+  en.className = "line-en";
+  const num = document.createElement("span");
+  num.className = "line-num";
+  num.textContent = line.index;
+  en.appendChild(num);
+  en.insertAdjacentHTML("beforeend", renderLineHtml(line)); // 内部已转义
+  el.appendChild(en);
+  if (line.zh) {
+    const zh = document.createElement("div");
+    zh.className = "line-zh";
+    zh.textContent = line.zh; // textContent 防注入
+    el.appendChild(zh);
   }
-  return out.trim();
+  // 底部一行：左侧标注提示标签，右侧"修改标注"按钮（无标注的句也可从零手写）
+  const foot = document.createElement("div");
+  foot.className = "line-foot";
+  const tip = document.createElement("div");
+  tip.className = "tip-icons";
+  for (const t of lineTips(line)) {
+    const s = document.createElement("span");
+    s.textContent = t;
+    tip.appendChild(s);
+  }
+  foot.appendChild(tip);
+  const editBtn = document.createElement("button");
+  editBtn.className = "btn-edit-markup";
+  editBtn.textContent = "✏️ 修改标注";
+  editBtn.onclick = (e) => {
+    e.stopPropagation(); // 不触发卡片的点句播放
+    openMarkupDialog(line);
+  };
+  foot.appendChild(editBtn);
+  el.appendChild(foot);
 }
 
 function openLearn(song) {
@@ -365,33 +387,7 @@ function openLearn(song) {
   lineEls = song.lines.map((line) => {
     const el = document.createElement("div");
     el.className = "line";
-    const en = document.createElement("div");
-    en.className = "line-en";
-    const num = document.createElement("span");
-    num.className = "line-num";
-    num.textContent = line.index;
-    en.appendChild(num);
-    en.insertAdjacentHTML("beforeend", renderLineHtml(line)); // 内部已转义
-    el.appendChild(en);
-    if (line.zh) {
-      const zh = document.createElement("div");
-      zh.className = "line-zh";
-      zh.textContent = line.zh; // textContent 防注入
-      el.appendChild(zh);
-    }
-    const tips = [];
-    if (line.liaison && line.liaison.length) tips.push("︶ 连读");
-    if (line.swallow && line.swallow.length) tips.push("✂ 吞音 " + line.swallow.map(s => s.letters).join(" "));
-    if (tips.length) {
-      const tip = document.createElement("div");
-      tip.className = "tip-icons";
-      for (const t of tips) {
-        const s = document.createElement("span");
-        s.textContent = t;
-        tip.appendChild(s);
-      }
-      el.appendChild(tip);
-    }
+    fillLineEl(el, line);
     el.onclick = () => jumpToLine(line.index - 1);
     list.appendChild(el);
     return el;
@@ -488,6 +484,48 @@ function stopLearning() {
 
 $("btn-learn-back").onclick = () => { show("library"); loadSongs(); };
 
+// ---------- 修改标注弹窗 ----------
+let editingLine = null; // 正在改标注的那句（引用 learnSong.lines 里的对象，保存后就地生效）
+
+function openMarkupDialog(line) {
+  editingLine = line;
+  $("markup-title").textContent = `✏️ 修改标注 · 第 ${line.index} 句`;
+  $("markup-original").textContent = line.text; // 原句对照，textContent 防注入
+  $("markup-text").value = line.marked || line.text; // 没标过的句从原句起手
+  $("markup-error").hidden = true;
+  $("markup-dialog").showModal();
+  $("markup-text").focus();
+}
+
+$("btn-markup-cancel").onclick = () => $("markup-dialog").close();
+
+$("btn-markup-save").onclick = async () => {
+  const res = await fetch(`/api/songs/${learnSong.id}/lines/${editingLine.index}/markup`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: $("markup-text").value }),
+  });
+  if (!res.ok) {
+    // 校验失败（误改了词等）：弹窗内红字提示，不关闭，让用户接着改
+    $("markup-error").textContent = "😥 " + ((await res.json()).detail || "保存失败");
+    $("markup-error").hidden = false;
+    return;
+  }
+  editingLine.marked = (await res.json()).marked;
+  $("markup-dialog").close();
+  fillLineEl(lineEls[editingLine.index - 1], editingLine); // 就地重渲染这一句
+};
+
+$("btn-markup-reset").onclick = async () => {
+  // 后端重算规则引擎结果填入文本框（不落盘），由用户再点保存确认
+  const res = await fetch(`/api/songs/${learnSong.id}/lines/${editingLine.index}/markup/reset`,
+    { method: "POST" });
+  if (res.ok) {
+    $("markup-text").value = (await res.json()).text;
+    $("markup-error").hidden = true;
+  }
+};
+
 // 学习页的播放/暂停
 function toggleLearnPlay() {
   if (linePlaying) {
@@ -523,6 +561,7 @@ $("btn-speed").onclick = cycleSpeed;
 // 学习页快捷键：空格播放/暂停，←→切句，↑单句循环，↓变速
 document.addEventListener("keydown", (e) => {
   if (!screens.learn.classList.contains("active") || !learnSong) return;
+  if ($("markup-dialog").open) return; // 弹窗输入时把按键留给文本框
   const actions = {
     " ": toggleLearnPlay,
     ArrowLeft: () => stepLine(-1),

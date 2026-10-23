@@ -98,12 +98,22 @@ dialog {
 dialog::backdrop { background: rgba(74,64,57,.4); }
 dialog h2 { font-size: 20px; margin-bottom: 18px; }
 .dialog-text { font-size: 16px; line-height: 1.6; }
-dialog input {
+dialog input, dialog textarea {
   width: 100%; font-size: 17px; padding: 12px 16px; border-radius: 12px;
   border: 2px solid #E8DFD5; font-family: inherit; color: var(--ink);
 }
-dialog input:focus { outline: none; border-color: var(--teal); }
+dialog textarea { resize: vertical; line-height: 1.6; background: #FFFCF7; }
+dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--teal); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+
+/* 修改标注弹窗：句子较长，比默认对话框宽；原句对照用奶黄底突出 */
+#markup-dialog { width: min(600px, 92vw); }
+#markup-original {
+  background: var(--yellow-soft); border-radius: 10px;
+  padding: 8px 12px; margin-bottom: 12px;
+}
+#markup-dialog .legend { margin: 10px 0 0; }
+#btn-markup-reset { margin-right: auto; } /* 恢复自动靠左，与保存/取消拉开防误点 */
 
 /* 歌词页 */
 .learn-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
@@ -128,8 +138,16 @@ dialog input:focus { outline: none; border-color: var(--teal); }
 /* 连读 ⌒ 与 吞音标注（与 UI 定稿一致） */
 .liaison { border-bottom: 3px solid var(--coral); border-radius: 2px; padding-bottom: 1px; }
 .swallow { color: #C9BFB4; text-decoration: line-through; text-decoration-color: var(--coral); }
-.tip-icons { margin-top: 8px; font-size: 13px; display: flex; gap: 14px; }
+.line-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; min-height: 26px; }
+.tip-icons { font-size: 13px; display: flex; gap: 14px; flex: 1; }
 .tip-icons span { background: var(--coral-soft); color: var(--coral); border-radius: 8px; padding: 2px 8px; font-weight: bold; }
+/* 每句右下角的修改标注按钮：小号幽灵风，不抢歌词的视觉重心 */
+.btn-edit-markup {
+  border: 2px solid #E8DFD5; background: transparent; color: var(--ink-soft);
+  border-radius: 999px; font-size: 12px; font-weight: bold; padding: 3px 12px;
+  cursor: pointer; font-family: inherit; flex-shrink: 0;
+}
+.btn-edit-markup:hover { border-color: var(--teal); color: var(--teal); }
 .legend { font-size: 13px; color: var(--ink-soft); margin: 4px 0 16px; }
 .legend b { color: var(--coral); }
 .line-num {

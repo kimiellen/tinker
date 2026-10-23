@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner, annotate, evaluator
+from . import aligner, annotate, evaluator, markup
 from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
@@ -29,6 +29,26 @@ recorder = Recorder(RECORDINGS_DIR)
 store = SongStore(DATA_DIR / "songs.json")
 
 
+def _migrate_marked_annotations() -> None:
+    """2026-10-23 spec-change：标注落盘形态从 liaison/swallow 结构改为 marked
+    标记文本。迁移前不存在手动标注，旧结构直接重跑规则引擎换算，无数据可丢。"""
+    for song in store.list():
+        if not song.lines:
+            continue
+        dirty = False
+        for line in song.lines:
+            line.pop("liaison", None)
+            line.pop("swallow", None)
+            if "marked" not in line:
+                annotate.annotate_line(line)
+                dirty = True
+        if dirty:
+            store.update(song)
+
+
+_migrate_marked_annotations()
+
+
 class StopRequest(BaseModel):
     title: str = Field(default="", max_length=100)
     discard: bool = False
@@ -40,6 +60,10 @@ class LyricsRequest(BaseModel):
 
 class OrderRequest(BaseModel):
     ids: list[str]
+
+
+class MarkupRequest(BaseModel):
+    text: str = Field(max_length=2000)
 
 
 @app.post("/api/recordings/start", status_code=201)
@@ -162,6 +186,37 @@ def annotate_song(song_id: str) -> dict:
     song.annotate_error = None
     store.update(song)
     return {"status": "done"}
+
+
+# ---------- 逐句手动修改标注（edit-markup） ----------
+
+def _get_line(song: Song, line_index: int) -> dict:
+    for line in song.lines or []:
+        if line["index"] == line_index:
+            return line
+    raise HTTPException(status_code=404, detail="没有这一句")
+
+
+@app.put("/api/songs/{song_id}/lines/{line_index}/markup")
+def set_line_markup(song_id: str, line_index: int, req: MarkupRequest) -> dict:
+    song = _get_song(song_id)
+    line = _get_line(song, line_index)
+    marked = req.text.strip()
+    err = markup.validate_markup(line["text"], marked)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    line["marked"] = marked
+    store.update(song)
+    return line
+
+
+@app.post("/api/songs/{song_id}/lines/{line_index}/markup/reset")
+def reset_line_markup(song_id: str, line_index: int) -> dict:
+    # 只重算返回、不落盘：由用户在弹窗里再点保存确认，避免误触覆盖手动成果
+    line = _get_line(_get_song(song_id), line_index)
+    fresh = dict(line)
+    annotate.annotate_line(fresh)
+    return {"text": fresh["marked"]}
 
 
 # ---------- 跟唱评估 ----------
