@@ -219,6 +219,27 @@ def reset_line_markup(song_id: str, line_index: int) -> dict:
     return {"text": fresh["marked"]}
 
 
+# ---------- 逐句手动微调句界（line-tweak） ----------
+
+class ExpandRequest(BaseModel):
+    side: str = Field(pattern="^(start|end)$")  # start=句首往前扩，end=句尾往后扩
+
+
+@app.post("/api/songs/{song_id}/lines/{line_index}/expand")
+def expand_line(song_id: str, line_index: int, req: ExpandRequest) -> dict:
+    song = _get_song(song_id)
+    if not song.lines:
+        raise HTTPException(status_code=400, detail="先完成分句再微调")
+    _get_line(song, line_index)  # 句不存在走统一 404
+    try:
+        audio = decode_audio_16k(RECORDINGS_DIR / song.audio_file)
+        aligner.expand_boundary(song.lines, line_index, req.side, audio)
+    except aligner.AlignError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    store.update(song)
+    return {"lines": song.lines}
+
+
 # ---------- 跟唱评估 ----------
 
 def _attempt_path(attempt_id: str) -> Path:

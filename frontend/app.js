@@ -376,7 +376,38 @@ function fillLineEl(el, line) {
     openMarkupDialog(line);
   };
   foot.appendChild(editBtn);
+  // 句界微调（line-tweak）：上=句首往前扩、下=句尾往后扩，吸附到换气低谷，
+  // 邻句自动同步收缩；反向收回用邻句的同向按钮
+  const tweak = document.createElement("div");
+  tweak.className = "line-tweak";
+  for (const [icon, side, hint] of [["◀", "start", "句首往前扩一点（上一句变短）"],
+                                    ["▶", "end", "句尾往后扩一点（下一句变短）"]]) {
+    const b = document.createElement("button");
+    b.className = "btn-tweak";
+    b.textContent = icon;
+    b.title = hint;
+    b.onclick = (e) => { e.stopPropagation(); tweakLine(line, side, b); }; // 不触发点句播放
+    tweak.appendChild(b);
+  }
+  foot.appendChild(tweak);
   el.appendChild(foot);
+}
+
+async function tweakLine(line, side, btn) {
+  const res = await fetch(`/api/songs/${learnSong.id}/lines/${line.index}/expand`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ side }),
+  });
+  if (!res.ok) {
+    // 到头了等 400：按钮短暂打叉提示，不改数据
+    btn.textContent = "✕";
+    setTimeout(() => { btn.textContent = side === "start" ? "◀" : "▶"; }, 800);
+    return;
+  }
+  // 就地更新时间戳（保持对象引用，弹窗/播放逻辑读的都是同一批对象）
+  const fresh = (await res.json()).lines;
+  fresh.forEach((l, i) => { learnSong.lines[i].start = l.start; learnSong.lines[i].end = l.end; });
 }
 
 function openLearn(song) {

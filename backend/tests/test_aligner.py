@@ -175,6 +175,76 @@ def test_boundary_moves_to_energy_valley():
     assert 2.55 < with_audio[0]["end"] < 2.95
 
 
+def test_expand_start_snaps_to_trough_and_syncs_shared_boundary():
+    """手动微调：句首往前扩应吸附到换气低谷；共享句界（prev.end==cur.start）
+    时上句 end 同步收缩。"""
+    import numpy as np
+
+    from tinker.aligner import expand_boundary
+    from tinker.audio import SAMPLE_RATE
+
+    rng = np.random.default_rng(0)
+    audio = (rng.standard_normal(6 * SAMPLE_RATE) * 0.5).astype(np.float32)
+    audio[int(1.9 * SAMPLE_RATE):int(2.1 * SAMPLE_RATE)] *= 0.002  # 2.0s 处换气低谷
+
+    lines = [{"index": 1, "text": "a", "zh": "", "start": 1.0, "end": 2.5},
+             {"index": 2, "text": "b", "zh": "", "start": 2.5, "end": 4.0}]
+    expand_boundary(lines, 2, "start", audio)
+    assert lines[1]["start"] == pytest.approx(2.0, abs=0.15)
+    assert lines[0]["end"] == lines[1]["start"]  # 上句同步收缩
+
+
+def test_expand_end_snaps_forward():
+    import numpy as np
+
+    from tinker.aligner import expand_boundary
+    from tinker.audio import SAMPLE_RATE
+
+    rng = np.random.default_rng(1)
+    audio = (rng.standard_normal(6 * SAMPLE_RATE) * 0.5).astype(np.float32)
+    audio[int(2.9 * SAMPLE_RATE):int(3.1 * SAMPLE_RATE)] *= 0.002
+
+    lines = [{"index": 1, "text": "a", "zh": "", "start": 1.0, "end": 2.5},
+             {"index": 2, "text": "b", "zh": "", "start": 2.5, "end": 4.0}]
+    expand_boundary(lines, 1, "end", audio)
+    assert lines[0]["end"] == pytest.approx(3.0, abs=0.15)
+    assert lines[1]["start"] == lines[0]["end"]
+
+
+def test_expand_across_interlude_does_not_swallow_prev_line():
+    """间奏分隔的句界（prev.end < cur.start）只动本句，且不越过间奏另一侧。"""
+    import numpy as np
+
+    from tinker.aligner import expand_boundary
+    from tinker.audio import SAMPLE_RATE
+
+    rng = np.random.default_rng(2)
+    audio = (rng.standard_normal(8 * SAMPLE_RATE) * 0.5).astype(np.float32)
+    audio[int(1.85 * SAMPLE_RATE):int(2.05 * SAMPLE_RATE)] *= 0.002  # 低谷在上句 end 之外
+
+    lines = [{"index": 1, "text": "a", "zh": "", "start": 1.0, "end": 2.0},
+             {"index": 2, "text": "b", "zh": "", "start": 4.5, "end": 6.0}]
+    expand_boundary(lines, 2, "start", audio)
+    # 窗口左界钳在 prev.end=2.0：新句首不早于 2.0，上句 end 不动
+    assert lines[1]["start"] >= 2.0
+    assert lines[1]["start"] < 4.5
+    assert lines[0]["end"] == 2.0
+
+
+def test_expand_at_limit_raises():
+    import numpy as np
+
+    from tinker.aligner import AlignError, expand_boundary
+    from tinker.audio import SAMPLE_RATE
+
+    audio = (np.random.default_rng(3).standard_normal(4 * SAMPLE_RATE) * 0.5).astype(np.float32)
+    lines = [{"index": 1, "text": "a", "zh": "", "start": 0.02, "end": 1.0}]
+    with pytest.raises(AlignError):
+        expand_boundary(lines, 1, "start", audio)   # 句首已到 0 附近
+    with pytest.raises(AlignError):
+        expand_boundary(lines, 99, "end", audio)    # 没有这一句
+
+
 def test_interlude_is_not_absorbed_by_either_line():
     """两句词锚点间隔 >3s 是间奏而非换气：不共享边界，谁都不占间奏，
     否则单句循环会把整段间奏播出来。"""

@@ -148,6 +148,14 @@ dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--t
   cursor: pointer; font-family: inherit; flex-shrink: 0;
 }
 .btn-edit-markup:hover { border-color: var(--teal); color: var(--teal); }
+/* 句界微调按钮：竖排两个小号幽灵按钮，句卡最右缘 */
+.line-tweak { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.btn-tweak {
+  border: 2px solid #E8DFD5; background: transparent; color: var(--ink-soft);
+  border-radius: 8px; font-size: 11px; width: 26px; height: 22px; line-height: 1;
+  cursor: pointer; font-family: inherit; padding: 0;
+}
+.btn-tweak:hover { border-color: var(--teal); color: var(--teal); }
 .legend { font-size: 13px; color: var(--ink-soft); margin: 4px 0 16px; }
 .legend b { color: var(--coral); }
 .line-num {

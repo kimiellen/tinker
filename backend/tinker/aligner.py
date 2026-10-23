@@ -234,6 +234,69 @@ def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float)
         i = j
 
 
+def _rms_envelope(audio: np.ndarray) -> tuple[np.ndarray, float]:
+    """25ms 窗、10ms 步长的短时能量包络；人声换气低谷在 100ms 尺度上足够清晰。
+    返回 (rms, 步长秒数)。"""
+    frame, hop = int(0.025 * SAMPLE_RATE), int(0.010 * SAMPLE_RATE)
+    if len(audio) < frame:
+        return np.zeros(0), hop / SAMPLE_RATE
+    frames = np.lib.stride_tricks.sliding_window_view(audio, frame)[::hop]
+    return np.sqrt((frames ** 2).mean(axis=1)), hop / SAMPLE_RATE
+
+
+def _trough(rms: np.ndarray, hop_s: float, lo: float, hi: float) -> float | None:
+    """[lo, hi] 秒内能量最低点对应的时刻；窗口不足 0.1s 返回 None。"""
+    if hi - lo < 0.1:
+        return None
+    a = min(int(lo / hop_s), len(rms) - 1)
+    b = min(int(hi / hop_s) + 1, len(rms))
+    if b <= a:
+        return None
+    return round((a + int(np.argmin(rms[a:b]))) * hop_s + 0.0125, 2)
+
+
+def expand_boundary(lines: list[dict], index: int, side: str, audio: np.ndarray) -> None:
+    """把第 index 句（1 起）的句界向 side（"start"句首/"end"句尾）方向扩到
+    0.8s 内最近的能量低谷（换气口），邻句同步收缩。就地修改 lines。
+
+    手动修边是人工监督场景：点一下听一下，算法取窗口内最低点即可。
+    共享句界（prev.end == cur.start）两句同步移动；间奏分隔的句界只动本句，
+    不吞噬间奏另一侧。邻句被压到不足 0.3s 或已到尽头时报 AlignError。
+    """
+    i = index - 1
+    if not 0 <= i < len(lines):
+        raise AlignError("没有这一句")
+    cur = lines[i]
+    rms, hop_s = _rms_envelope(audio)
+    if len(rms) == 0:
+        raise AlignError("音频太短，没法微调")
+
+    if side == "start":
+        b = cur["start"]
+        prev = lines[i - 1] if i > 0 else None
+        shared = prev is not None and abs(prev["end"] - b) < 0.01
+        # 共享句界：给上句留至少 0.3s；间奏分隔：不吞噬间奏另一侧
+        limit = (prev["start"] + 0.3) if shared else (prev["end"] if prev else 0.0)
+        new_b = _trough(rms, hop_s, max(b - 0.8, limit), b - 0.05)
+        if new_b is None or new_b >= b:
+            raise AlignError("句首已经到头啦")
+        cur["start"] = new_b
+        if shared:
+            prev["end"] = new_b
+    else:
+        b = cur["end"]
+        nxt = lines[i + 1] if i + 1 < len(lines) else None
+        shared = nxt is not None and abs(nxt["start"] - b) < 0.01
+        duration = len(audio) / SAMPLE_RATE
+        limit = (nxt["end"] - 0.3) if shared else (nxt["start"] if nxt else duration)
+        new_b = _trough(rms, hop_s, b + 0.05, min(b + 0.8, limit))
+        if new_b is None or new_b <= b:
+            raise AlignError("句尾已经到头啦")
+        cur["end"] = new_b
+        if shared:
+            nxt["start"] = new_b
+
+
 def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[float | None]:
     """对每对相邻句，在两句归属分界词之间的空隙里找 RMS 能量最低点作为边界。
 
@@ -242,13 +305,9 @@ def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[
     低谷，切在那里两头都干净。空隙太窄（真连唱）或太宽（>3s，是间奏
     而非换气）时返回 None，走中点/各自留余量兜底。
     """
-    # 25ms 窗、10ms 步长的短时能量包络；人声换气低谷在 100ms 尺度上足够清晰
-    frame, hop = int(0.025 * SAMPLE_RATE), int(0.010 * SAMPLE_RATE)
-    if len(audio) < frame:
+    rms, hop_s = _rms_envelope(audio)
+    if len(rms) == 0:
         return [None] * (len(intervals) - 1)
-    frames = np.lib.stride_tricks.sliding_window_view(audio, frame)[::hop]
-    rms = np.sqrt((frames ** 2).mean(axis=1))
-    hop_s = hop / SAMPLE_RATE
 
     boundaries: list[float | None] = []
     for cur, nxt in zip(intervals, intervals[1:]):
@@ -258,16 +317,8 @@ def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[
         if gap > 3.0:
             boundaries.append(None)
             continue
-        lo, hi = cur[1] + 0.05, nxt[0] - 0.05  # 两端留边，不切进词本体
-        if hi - lo < 0.1:  # 空隙太小，没有换气口可找
-            boundaries.append(None)
-            continue
-        a = min(int(lo / hop_s), len(rms) - 1)
-        b = min(int(hi / hop_s) + 1, len(rms))
-        if b <= a:
-            boundaries.append(None)
-            continue
-        boundaries.append(round((a + int(np.argmin(rms[a:b]))) * hop_s + 0.0125, 2))
+        # 两端留边，不切进词本体；空隙太小没有换气口可找时走中点兜底
+        boundaries.append(_trough(rms, hop_s, cur[1] + 0.05, nxt[0] - 0.05))
     return boundaries
 
 
