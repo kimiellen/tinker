@@ -6,6 +6,11 @@
 数字），用 difflib.SequenceMatcher 做整体匹配；每行取首个/末个匹配词的
 时间戳作为该句时间区间。没匹配上的行（转写漏词、纯哼唱等）按相邻已匹配
 行的时间线性插值，保证每一句都可点播。
+
+切边前先做词归属：相邻两句锚词之间常夹着"无人认领"的转写词（歌词首/尾词
+被转写变形导致匹配失败，如 Forecaster→forecasters），按两侧歌词缺失词数
+把它们分给上句或下句，换气口切边才不会从这些词中间劈开（上句带出下句的
+词）。
 """
 from __future__ import annotations
 
@@ -121,15 +126,20 @@ def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None
 
     # 整体匹配：matching_blocks 在两个序列上都是单调的，所以区间天然有序
     matcher = difflib.SequenceMatcher(None, lyric_tokens, [w.text for w in words], autojunk=False)
-    matched: list[list[int]] = [[] for _ in parsed]  # 每行匹配到的 whisper 词下标
+    matched: list[list[int]] = [[] for _ in parsed]      # 每行匹配到的 whisper 词下标
+    matched_tok: list[list[int]] = [[] for _ in parsed]  # 每行匹配到的歌词词下标（全局序号）
     for block in matcher.get_matching_blocks():
         for k in range(block.size):
-            matched[token_line[block.a + k]].append(block.b + k)
+            line = token_line[block.a + k]
+            matched[line].append(block.b + k)
+            matched_tok[line].append(block.a + k)
+
+    spans = _assign_unclaimed(parsed, matched, matched_tok, words)
 
     intervals: list[list[float] | None] = []
-    for hits in matched:
-        if hits:
-            intervals.append([words[hits[0]].start, words[hits[-1]].end])
+    for span in spans:
+        if span is not None:
+            intervals.append([words[span[0]].start, words[span[1]].end])
         else:
             intervals.append(None)
     if not any(intervals):
@@ -143,6 +153,48 @@ def align_lyrics(lyrics: str, words: list[Word], audio: np.ndarray | None = None
         {"index": i + 1, "text": en, "zh": zh, "start": round(iv[0], 2), "end": round(iv[1], 2)}
         for i, ((en, zh, _), iv) in enumerate(zip(parsed, intervals))
     ]
+
+
+def _assign_unclaimed(parsed: list[tuple[str, str, list[str]]],
+                      matched: list[list[int]],
+                      matched_tok: list[list[int]],
+                      words: list[Word]) -> list[list[int] | None]:
+    """定每行实际占有的 whisper 词区间 [首词下标, 末词下标]（含分配来的词）。
+
+    相邻两句的锚词之间夹着"无人认领"的转写词时（歌词首/尾词匹配失败所致），
+    按两侧歌词的缺失词数分配归属：一侧不缺则全归另一侧，都缺则按比例分。
+    锚词间隔 >3s 是间奏而非词间隙，不参与分配（间奏谁都不占，与
+    _valley_boundaries 的口径一致）。
+    """
+    offsets: list[int] = []  # 每行首个词在全局歌词词序列里的下标
+    o = 0
+    for _, _, tokens in parsed:
+        offsets.append(o)
+        o += len(tokens)
+
+    spans: list[list[int] | None] = [[m[0], m[-1]] if m else None for m in matched]
+    for i in range(len(parsed) - 1):
+        if spans[i] is None or spans[i + 1] is None:
+            continue
+        a_end, b_start = spans[i][1], spans[i + 1][0]
+        if words[b_start].start - words[a_end].end > 3.0:
+            continue
+        gap_n = b_start - a_end - 1  # 两锚词之间的无人认领词数
+        if gap_n <= 0:
+            continue
+        tail_miss = (offsets[i] + len(parsed[i][2]) - 1) - matched_tok[i][-1]
+        head_miss = matched_tok[i + 1][0] - offsets[i + 1]
+        if tail_miss + head_miss == 0:
+            continue
+        if head_miss == 0:
+            take = gap_n
+        elif tail_miss == 0:
+            take = 0
+        else:
+            take = round(gap_n * tail_miss / (tail_miss + head_miss))
+        spans[i][1] = a_end + take
+        spans[i + 1][0] = b_start - (gap_n - take)
+    return spans
 
 
 def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float) -> None:
@@ -183,7 +235,7 @@ def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float)
 
 
 def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[float | None]:
-    """对每对相邻句，在两句词锚点之间的空隙里找 RMS 能量最低点作为边界。
+    """对每对相邻句，在两句归属分界词之间的空隙里找 RMS 能量最低点作为边界。
 
     唱歌的尾音会拖过 whisper 给的词 end，中点切分会从尾音中间劈开
     （上句被截断、下句开头带上句尾音）；两句之间几乎总有换气的音量
@@ -233,6 +285,11 @@ def _pad_and_clamp(intervals: list[list[float]],
             padded[i][1] = padded[i + 1][0] = b
         elif padded[i][1] > padded[i + 1][0]:
             mid = (padded[i][1] + padded[i + 1][0]) / 2
+            # 归属后的两词紧贴时，余量中点会越界 25ms 切进下词本体：
+            # 钳回词缝（两词各自的原始起止之间）内
+            lo, hi = intervals[i][1], intervals[i + 1][0]
+            if lo <= hi:
+                mid = min(max(mid, lo), hi)
             padded[i][1] = padded[i + 1][0] = mid
     for i, iv in enumerate(padded):
         intervals[i] = iv

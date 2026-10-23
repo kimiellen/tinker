@@ -110,6 +110,39 @@ def test_intervals_never_overlap_and_are_playable():
         assert line["end"] - line["start"] >= 0.3
 
 
+def test_unclaimed_word_goes_to_line_missing_head():
+    """歌词首词被转写变形（Forecaster→forecasters）匹配失败时，这个词应归
+    下句而不是留在两句之间的无人区——否则换气口切边会把它劈给上句，
+    用户听到"下句的词出现在上句"（2026-10-23 Young for You 行2|3 事故）。"""
+    # star[1.0-1.4] forecasters[1.5-1.9] said[2.0-2.4] the[2.5-2.9] sun[3.0-3.4]
+    words = make_words("to your star forecasters said the sun", start=0.0)
+    lines = align_lyrics("To your star\nForecaster said the sun", words)
+    assert lines[0]["end"] == lines[1]["start"]
+    # 边界钳在 star 与 forecasters 的词缝 [1.4, 1.5] 内，第 2 句从 forecaster 起
+    assert 1.4 <= lines[0]["end"] <= 1.5
+
+
+def test_unclaimed_words_split_when_both_sides_missing():
+    """上句缺尾词、下句缺首词时，中间的无人认领词按比例分（1:1 各得一个）。"""
+    # one[0-.4] two[.5-.9] wa[1.0-1.4] wb[1.5-1.9] five[2.0-2.4] six[2.5-2.9]
+    words = make_words("one two wa wb five six")
+    lines = align_lyrics("one two three\nfour five six", words)
+    # 边界落在 wa 与 wb 的词缝 [1.4, 1.5]：wa 归上句、wb 归下句
+    assert lines[0]["end"] == lines[1]["start"]
+    assert 1.4 <= lines[0]["end"] <= 1.5
+
+
+def test_unclaimed_word_in_interlude_not_assigned():
+    """锚词间隔 >3s 是间奏：即使下句缺首词，无人认领的词也不参与分配，
+    两句各自留余量、谁都不占间奏。"""
+    words = [Word("one", 1.0, 1.4), Word("two", 1.5, 1.9),
+             Word("humming", 3.0, 3.4), Word("three", 5.0, 5.4),
+             Word("four", 12.5, 12.9)]
+    lines = align_lyrics("one two\ntres four", words)
+    assert lines[0]["end"] == pytest.approx(2.05, abs=0.01)   # two.end + 0.15
+    assert lines[1]["start"] == pytest.approx(12.4, abs=0.01)  # four.start - 0.1
+
+
 def test_boundary_moves_to_energy_valley():
     """切句边界应落在两句间换气的能量低谷，而不是词锚点的中点。
 
