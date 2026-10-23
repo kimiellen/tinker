@@ -38,6 +38,10 @@ class LyricsRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
 
 
+class OrderRequest(BaseModel):
+    ids: list[str]
+
+
 @app.post("/api/recordings/start", status_code=201)
 def start_recording() -> dict:
     try:
@@ -72,6 +76,33 @@ def list_songs() -> list[Song]:
 @app.get("/api/songs/{song_id}")
 def song_detail(song_id: str) -> Song:
     return _get_song(song_id)
+
+
+@app.delete("/api/songs/{song_id}")
+def delete_song(song_id: str) -> dict:
+    song = store.remove(song_id)
+    if song is None:
+        raise HTTPException(status_code=404, detail="歌曲不存在")
+    # 彻底删除：录音 wav 与该歌的全部跟唱评估记录一起清掉，不留孤儿文件
+    (RECORDINGS_DIR / song.audio_file).unlink(missing_ok=True)
+    if ATTEMPTS_DIR.exists():
+        for meta in ATTEMPTS_DIR.glob("*.json"):
+            try:
+                record = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if record.get("song_id") == song_id:
+                (ATTEMPTS_DIR / f"{record['id']}.webm").unlink(missing_ok=True)
+                meta.unlink(missing_ok=True)
+    return {"status": "deleted"}
+
+
+@app.put("/api/songs/order")
+def reorder_songs(req: OrderRequest) -> dict:
+    # 必须提交歌单全量 id，防止拿着过期列表把别人刚录的歌排丢
+    if not store.reorder(req.ids):
+        raise HTTPException(status_code=409, detail="歌单已变化，请刷新后重试")
+    return {"status": "ok"}
 
 
 @app.put("/api/songs/{song_id}/lyrics")

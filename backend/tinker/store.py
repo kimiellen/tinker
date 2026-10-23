@@ -24,6 +24,7 @@ class Song:
     align_error: str | None = None
     annotate_status: str = "none"        # none | done（规则引擎毫秒级同步完成，无 running/error）
     annotate_error: str | None = None
+    position: int = 0                    # 歌单顺序，越小越靠前（新歌排最前）
 
 
 class SongStore:
@@ -35,6 +36,16 @@ class SongStore:
             for item in json.loads(path.read_text(encoding="utf-8")):
                 song = Song(**item)
                 self._songs[song.id] = song
+        # 旧数据没有 position 字段，默认 0 会全部撞车：按录入时间倒序补出初始顺序
+        # （与 M9 之前的展示顺序一致，升级后用户看到的样子不变）
+        positions = [s.position for s in self._songs.values()]
+        if len(positions) != len(set(positions)):
+            with self._lock:
+                for i, song in enumerate(
+                    sorted(self._songs.values(), key=lambda s: (s.created_at, s.id), reverse=True)
+                ):
+                    song.position = i
+                self._flush()
 
     def _flush(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,16 +56,37 @@ class SongStore:
 
     def add(self, song: Song) -> None:
         with self._lock:
+            # 新歌排最前：position 比现有的最小值还小
+            if self._songs:
+                song.position = min(s.position for s in self._songs.values()) - 1
             self._songs[song.id] = song
             self._flush()
 
     def update(self, song: Song) -> None:
-        # 与 add 同一条路，语义上强调"改已有歌曲"
-        self.add(song)
+        with self._lock:
+            self._songs[song.id] = song
+            self._flush()
+
+    def remove(self, song_id: str) -> Song | None:
+        with self._lock:
+            song = self._songs.pop(song_id, None)
+            if song is not None:
+                self._flush()
+            return song
+
+    def reorder(self, ids: list[str]) -> bool:
+        # 必须恰好覆盖全部歌曲，否则说明前端拿到的是过期列表，拒绝部分生效
+        with self._lock:
+            if set(ids) != set(self._songs) or len(ids) != len(self._songs):
+                return False
+            for i, song_id in enumerate(ids):
+                self._songs[song_id].position = i
+            self._flush()
+            return True
 
     def get(self, song_id: str) -> Song | None:
         return self._songs.get(song_id)
 
     def list(self) -> list[Song]:
-        # 新歌排前面，符合"录完马上要学"的使用顺序
-        return sorted(self._songs.values(), key=lambda s: s.created_at, reverse=True)
+        # 按歌单顺序展示；position 由用户拖拽或录入先后决定
+        return sorted(self._songs.values(), key=lambda s: s.position)

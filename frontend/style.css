@@ -50,7 +50,6 @@ h1 { font-size: 28px; margin-bottom: 4px; }
   margin-top: 14px; box-shadow: 0 4px 16px rgba(74,64,57,.08); cursor: pointer;
 }
 .song-item:hover { outline: 3px solid var(--coral-soft); }
-.song-item.playing { outline: 3px solid var(--teal); }
 .song-cover {
   width: 64px; height: 64px; border-radius: 16px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center; font-size: 30px;
@@ -58,10 +57,14 @@ h1 { font-size: 28px; margin-bottom: 4px; }
 .song-meta { flex: 1; }
 .song-name { font-size: 19px; font-weight: bold; }
 .song-info { font-size: 13px; color: var(--ink-soft); margin-top: 4px; }
-.song-play {
+.song-del {
   width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer;
   font-size: 20px; background: var(--yellow-soft); flex-shrink: 0;
 }
+.song-del:hover { background: var(--coral-soft); }
+/* 拖拽排序：拖起的那张卡片半透明，其余卡片照常排列形成落点 */
+.song-item { cursor: grab; }
+.song-item.dragging { opacity: .4; cursor: grabbing; }
 
 /* 录音页 */
 .rec-wrap { text-align: center; padding-top: 24px; }
@@ -93,6 +96,7 @@ dialog {
 }
 dialog::backdrop { background: rgba(74,64,57,.4); }
 dialog h2 { font-size: 20px; margin-bottom: 18px; }
+.dialog-text { font-size: 16px; line-height: 1.6; }
 dialog input {
   width: 100%; font-size: 17px; padding: 12px 16px; border-radius: 12px;
   border: 2px solid #E8DFD5; font-family: inherit; color: var(--ink);

@@ -21,7 +21,7 @@ const COVERS = [
   ["🌈", "var(--teal-soft)"],
 ];
 
-let currentAudio = null; // 同一时刻只放一首歌
+let deletingSong = null; // 待二次确认删除的歌
 
 async function loadSongs() {
   const res = await fetch("/api/songs");
@@ -34,25 +34,76 @@ async function loadSongs() {
     const [emoji, bg] = COVERS[i % COVERS.length];
     const item = document.createElement("div");
     item.className = "song-item";
+    item.draggable = true;
+    item.dataset.songId = song.id;
     item.innerHTML = `
       <div class="song-cover" style="background:${bg}">${emoji}</div>
       <div class="song-meta">
         <div class="song-name"></div>
         <div class="song-info">${songStatus(song)}</div>
       </div>
-      <button class="song-play" title="播放">▶</button>`;
+      <button class="song-del" title="删除">🗑</button>`;
     item.querySelector(".song-name").textContent = song.title; // textContent 防注入
 
-    const btn = item.querySelector(".song-play");
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      toggleLibraryPlay(song, item, btn);
+    item.querySelector(".song-del").onclick = (e) => {
+      e.stopPropagation(); // 不触发卡片的学习页跳转
+      deletingSong = song;
+      $("delete-song-title").textContent = song.title;
+      $("delete-dialog").showModal();
     };
-    // 点卡片：分好句的去学习页，否则去贴歌词页
+    // 点卡片：分好句的去学习页，否则去贴歌词页（拖拽后 mouseup 不触发 click，互不冲突）
     item.onclick = () => openSong(song.id);
     list.appendChild(item);
   });
 }
+
+$("btn-delete-cancel").onclick = () => $("delete-dialog").close();
+
+$("btn-delete-ok").onclick = async () => {
+  $("delete-dialog").close();
+  const res = await fetch(`/api/songs/${deletingSong.id}`, { method: "DELETE" });
+  if (res.ok) {
+    // 就地移除 DOM，不整页重渲染，避免闪烁
+    const item = document.querySelector(`.song-item[data-song-id="${deletingSong.id}"]`);
+    if (item) item.remove();
+    if (!$("song-list").children.length) $("empty-hint").hidden = false;
+  }
+  deletingSong = null;
+};
+
+// ---------- 歌单拖动排序 ----------
+// HTML5 拖拽：dragover 中实时移动 DOM 给出落点反馈，drop 后把新顺序整体提交后端
+const songList = $("song-list");
+let dragItem = null;
+
+songList.addEventListener("dragstart", (e) => {
+  dragItem = e.target.closest(".song-item");
+  if (dragItem) dragItem.classList.add("dragging");
+});
+
+songList.addEventListener("dragover", (e) => {
+  e.preventDefault(); // 必须拦默认行为才允许 drop
+  if (!dragItem) return;
+  const after = [...songList.querySelectorAll(".song-item:not(.dragging)")]
+    .find((el) => e.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2);
+  if (after) songList.insertBefore(dragItem, after);
+  else songList.appendChild(dragItem);
+});
+
+songList.addEventListener("drop", (e) => e.preventDefault());
+
+songList.addEventListener("dragend", async () => {
+  if (!dragItem) return;
+  dragItem.classList.remove("dragging");
+  dragItem = null;
+  const ids = [...songList.querySelectorAll(".song-item")].map((el) => el.dataset.songId);
+  const res = await fetch("/api/songs/order", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) loadSongs(); // 列表已变化（409 等）：拉最新数据恢复一致
+});
 
 function songStatus(song) {
   const base = formatDuration(song.duration);
@@ -70,24 +121,6 @@ async function openSong(songId) {
   } else {
     openLyrics(song);
   }
-}
-
-function toggleLibraryPlay(song, item, btn) {
-  if (currentAudio && currentAudio.btn === btn) {
-    currentAudio.audio.pause();
-    return;
-  }
-  if (currentAudio) currentAudio.audio.pause();
-  const audio = new Audio(`/api/songs/${song.id}/audio`);
-  audio.onended = audio.onpause = () => {
-    btn.textContent = "▶";
-    item.classList.remove("playing");
-    currentAudio = null;
-  };
-  audio.play();
-  btn.textContent = "⏸";
-  item.classList.add("playing");
-  currentAudio = { audio, btn };
 }
 
 function formatDuration(sec) {
@@ -455,8 +488,7 @@ function stopLearning() {
 
 $("btn-learn-back").onclick = () => { show("library"); loadSongs(); };
 
-// 学习页的播放/暂停。叫 toggleLearnPlay 而不叫 togglePlay——
-// 歌曲库的 toggleLibraryPlay 曾与它同名撞车，后者被覆盖失效
+// 学习页的播放/暂停
 function toggleLearnPlay() {
   if (linePlaying) {
     player.pause();
