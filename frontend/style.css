@@ -32,12 +32,13 @@ h1 { font-size: 28px; margin-bottom: 4px; }
 .btn {
   border: none; border-radius: 999px; cursor: pointer;
   font-family: inherit; font-weight: bold; color: #fff;
-  transition: transform .1s;
+  transition: transform .1s; white-space: nowrap;
 }
 .btn:active { transform: scale(.96); }
 .btn-big { font-size: 22px; padding: 18px 48px; }
+.btn-md { font-size: 16px; padding: 12px 32px; }
 .btn-coral { background: var(--coral); }
-.btn-teal { background: var(--teal); padding: 12px 32px; font-size: 16px; }
+.btn-teal { background: var(--teal); }
 .btn-ghost {
   background: transparent; color: var(--ink-soft);
   border: 2px solid #E8DFD5; font-size: 14px; padding: 10px 24px;
