@@ -29,10 +29,24 @@ OVERRUN_GRACE_SECONDS = 15  # 歌播完后还录这么久就说明前端已经�
 MIC_RATE = 44100        # 与系统内录一致的采样率/声道，混音时不用重采样
 MIC_CHANNELS = 2
 BYTES_PER_SEC = MIC_RATE * MIC_CHANNELS * 2
+TAKE_NAME_MAX = 100     # 与歌曲名一致：够长，又不会把列表撑破
 
 
 class TakeError(RuntimeError):
     pass
+
+
+def default_take_name(song_title: str, created_at: str) -> str:
+    """默认名「歌名-MM月DD日 HH:MM」。
+
+    时间取录制完成时刻（本地时区，与 created_at 同源）。脏数据解析不了就退回
+    原始字符串或纯歌名——列表因为一条旧记录打不开不值得。
+    """
+    try:
+        dt = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return f"{song_title}-{created_at}" if created_at else song_title
+    return f"{song_title}-{dt.month}月{dt.day}日 {dt.hour:02d}:{dt.minute:02d}"
 
 
 @dataclass
@@ -51,7 +65,7 @@ class _ActiveTake:
 
 
 class TakeRecorder:
-    """同一时刻只允许一条跟唱录音：孩子不会一边唱两首，也省掉并发混音。"""
+    """跟唱录音与唱录元数据管理：同一时刻只允许录一条，孩子不会一边唱两首。"""
 
     def __init__(self, store: SongStore, stems_dir: Path, takes_dir: Path):
         self._store = store
@@ -140,19 +154,23 @@ class TakeRecorder:
             raise TakeError("混音失败，再录一次吧") from e
         active.wav.unlink(missing_ok=True)
         duration = round(max(0.1, mic_seconds - max(offset_ms, 0) / 1000), 2)
+        created_at = datetime.now().isoformat(timespec="seconds")
         take = {
             "id": take_id,
             "file": out.name,
             "start": round(active.start, 2),
             "offset_ms": offset_ms,
             "duration": duration,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": created_at,
         }
         # 停止期间歌可能被删了：成品直接丢弃，不能把已删除的歌写回来
         fresh = self._store.get(song.id)
         if fresh is None:
             out.unlink(missing_ok=True)
             raise TakeError("歌曲已经被删除了")
+        # 名字在录制完成时落盘：改名后默认名要稳定，学习页与唱录页也共用同一份
+        take["name"] = default_take_name(fresh.title, created_at)
+        take["position"] = _next_take_position(self._store)
         fresh.takes = (fresh.takes or []) + [take]
         self._store.update(fresh)
         return take
@@ -176,6 +194,55 @@ class TakeRecorder:
                 if path.exists():
                     return path
         raise TakeError("没有这条演唱")
+
+    def list_all(self) -> list[dict]:
+        """跨歌扁平列表，供「我的唱录」页展示；按全局 position 排序。"""
+        rows = []
+        for song in self._store.list():
+            for take in song.takes or []:
+                rows.append({
+                    "song_id": song.id,
+                    "song_title": song.title,
+                    "id": take["id"],
+                    "name": take.get("name") or default_take_name(
+                        song.title, take.get("created_at", "")),
+                    "duration": take.get("duration", 0),
+                    "start": take.get("start", 0),
+                    "created_at": take.get("created_at", ""),
+                    "position": take.get("position", 0),
+                })
+        # position 理论上唯一；脏数据撞车时用录制时间兜底，列表仍然稳定
+        return sorted(rows, key=lambda r: (r["position"], r["created_at"], r["id"]))
+
+    def rename(self, song: Song, take_id: str, name: str) -> dict:
+        for take in song.takes or []:
+            if take["id"] == take_id:
+                take["name"] = name
+                self._store.update(song)
+                return take
+        raise TakeError("没有这条演唱")
+
+    def reorder(self, refs: list[tuple[str, str]]) -> bool:
+        """按 [(song_id, take_id)] 的全量顺序重排。
+
+        必须恰好覆盖当前全部唱录：前端拿着过期列表（期间又录了一条）时拒绝，
+        而不是部分生效把新唱录排丢——与歌单排序同一套纪律。
+        """
+        current = [(song.id, take["id"])
+                   for song in self._store.list() for take in (song.takes or [])]
+        if len(refs) != len(current) or set(refs) != set(current):
+            return False
+        position = {ref: i for i, ref in enumerate(refs)}
+        for song in self._store.list():
+            changed = False
+            for take in song.takes or []:
+                fresh = position[(song.id, take["id"])]
+                if take.get("position") != fresh:
+                    take["position"] = fresh
+                    changed = True
+            if changed:
+                self._store.update(song)
+        return True
 
     def cancel(self, song_id: str, take_id: str) -> None:
         """前端关页/刷前发来的兜底：丢掉进行中的这条录音，不留半成品。"""
@@ -255,6 +322,46 @@ class TakeRecorder:
         finally:
             if active.handle is not None and not active.handle.closed:
                 active.handle.close()
+
+
+def _next_take_position(store: SongStore) -> int:
+    """新唱录排最前：比现有最小 position 还小。"""
+    positions = [take.get("position") for song in store.list()
+                 for take in (song.takes or []) if isinstance(take.get("position"), int)]
+    return min(positions) - 1 if positions else 0
+
+
+def _take_timestamp(value: str) -> float:
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def migrate_takes(store: SongStore) -> None:
+    """给旧版本唱录补 name / position。
+
+    旧版本只存录音元数据，学习页按数组倒序展示（新录的在前）。迁移按
+    「新录的在前」补出全局顺序；已排过序的唱录保持相对顺序，幂等。
+    """
+    items = [(song, take) for song in store.list() for take in (song.takes or [])]
+    if all(isinstance(take.get("position"), int) and take.get("name") for _, take in items):
+        return
+    # 有 position 的排前面并保持原相对顺序；没有的按录制时间新→旧接在后面
+    def key(item):
+        _, take = item
+        position = take.get("position")
+        if position is not None:
+            return (0, position, "")
+        return (1, -_take_timestamp(take.get("created_at", "")), take["id"])
+
+    for i, (song, take) in enumerate(sorted(items, key=key)):
+        changed = take.get("position") != i or not take.get("name")
+        take["position"] = i
+        if not take.get("name"):
+            take["name"] = default_take_name(song.title, take.get("created_at", ""))
+        if changed:
+            store.update(song)
 
 
 def mix_args(stem: Path, mic: Path, start: float, offset_ms: int, out: Path,

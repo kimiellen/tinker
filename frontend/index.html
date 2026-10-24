@@ -13,8 +13,9 @@
   <h1>🎵 我的歌单</h1>
   <p class="sub">录下电脑里正在播放的英文歌，一句一句学会它！</p>
 
-  <div class="center">
+  <div class="home-actions">
     <button class="btn btn-big btn-coral" id="btn-new">🔴 录一首新歌</button>
+    <button class="btn btn-big btn-teal" id="btn-takes">🎧 我的唱录<span class="btn-count" id="takes-count" hidden></span></button>
   </div>
 
   <div id="song-list"></div>
@@ -100,6 +101,22 @@
   </div>
 </section>
 
+<!-- 我的唱录：跨歌曲陈列所有跟唱成品 -->
+<section class="screen" id="s5">
+  <div class="learn-head">
+    <button class="btn btn-ghost" id="btn-takes-back">← 返回</button>
+    <div>
+      <h1 class="head-title">🎧 我的唱录</h1>
+      <p class="sub">按住左边 ⠿ 可以拖动排序，把最喜欢的排到前面</p>
+    </div>
+  </div>
+  <p class="error" id="takes-error" hidden></p>
+  <div id="take-library"></div>
+  <p class="empty-hint" id="takes-empty" hidden>
+    还没有唱录……<br>去歌单打开一首歌，戴上耳机点「🎤 录跟唱」吧！
+  </p>
+</section>
+
 <!-- 跟唱成品回放对话框 -->
 <dialog id="take-dialog">
   <h2>🎉 唱完啦！听听看</h2>
@@ -108,6 +125,27 @@
   <div class="dialog-actions">
     <button class="btn btn-ghost" id="btn-take-discard">🗑 不要了</button>
     <button class="btn btn-teal btn-md" id="btn-take-keep">收下</button>
+  </div>
+</dialog>
+
+<!-- 唱录重命名对话框 -->
+<dialog id="take-rename-dialog">
+  <h2>✏️ 给这条唱录起个名字</h2>
+  <input type="text" id="take-rename-input" maxlength="100" placeholder="比如：第一次唱小星星">
+  <p class="error" id="take-rename-error" hidden></p>
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="btn-take-rename-cancel">取消</button>
+    <button class="btn btn-teal btn-md" id="btn-take-rename-save">保存</button>
+  </div>
+</dialog>
+
+<!-- 唱录删除二次确认对话框 -->
+<dialog id="take-delete-dialog">
+  <h2>🗑 要删掉这条唱录吗？</h2>
+  <p class="dialog-text">「<span id="take-delete-name"></span>」删掉就找不回来了哦</p>
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="btn-take-delete-cancel">先留着</button>
+    <button class="btn btn-coral btn-md" id="btn-take-delete-ok">删掉</button>
   </div>
 </dialog>
 

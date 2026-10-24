@@ -3,7 +3,9 @@
 
 const $ = (id) => document.getElementById(id);
 
-const screens = { library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4") };
+const screens = {
+  library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4"), takes: $("s5"),
+};
 function show(name) {
   if (name !== "learn") {
     stopLearning();      // 离开学习页就停声
@@ -11,6 +13,7 @@ function show(name) {
     abortTake();          // 录制中离开：这条作废，不留在列表里
     stopTakePlayback();
   }
+  if (name !== "takes") stopLibraryPlayback(); // 离开唱录页就停回放
   if (name !== "lyrics") stopAlignPolling();
   for (const [key, el] of Object.entries(screens)) el.classList.toggle("active", key === name);
 }
@@ -32,6 +35,10 @@ async function loadSongs() {
   const list = $("song-list");
   list.innerHTML = "";
   $("empty-hint").hidden = songs.length > 0;
+  // 唱录总数直接来自歌曲详情里的 takes，不用额外请求；0 时隐藏徽标
+  const takeCount = songs.reduce((n, song) => n + (song.takes || []).length, 0);
+  $("takes-count").textContent = takeCount;
+  $("takes-count").hidden = takeCount === 0;
 
   songs.forEach((song, i) => {
     const [emoji, bg] = COVERS[i % COVERS.length];
@@ -136,6 +143,7 @@ let timer = null;
 let seconds = 0;
 
 $("btn-new").onclick = () => show("record");
+$("btn-takes").onclick = () => openTakeLibrary();
 
 $("btn-rec-toggle").onclick = async () => {
   $("rec-error").hidden = true;
@@ -765,17 +773,27 @@ function abortTake() {
   if (takeRec) stopTake(true);
 }
 
+// 学习页「我的演唱」与首页唱录页共用同一份名称与全局顺序，避免同一个唱录两处叫法不同
 function renderTakes() {
   const takes = (learnSong && learnSong.takes) || [];
   $("take-list").hidden = takes.length === 0;
   const items = $("take-items");
   items.innerHTML = "";
-  takes.slice().reverse().forEach((take, i) => {
+  takes.slice().sort((a, b) =>
+    (a.position ?? 0) - (b.position ?? 0) || String(a.created_at).localeCompare(String(b.created_at)),
+  ).forEach((take) => {
     const row = document.createElement("div");
     row.className = "take-item";
-    const label = document.createElement("span");
+    const label = document.createElement("div");
     label.className = "take-label";
-    label.textContent = `第 ${takes.length - i} 次 · ${fmtClock(take.duration)}`;
+    const name = document.createElement("div");
+    name.className = "take-name";
+    name.textContent = take.name || `跟唱 ${fmtClock(take.duration)}`; // textContent 防注入
+    const meta = document.createElement("div");
+    meta.className = "take-meta";
+    const from = take.start > 0.5 ? `从 ${fmtClock(take.start)} 开始` : "从头唱";
+    meta.textContent = `时长 ${fmtClock(take.duration)} · ${from}`;
+    label.append(name, meta);
     const play = document.createElement("button");
     play.className = "take-btn";
     play.textContent = playingTakeId === take.id ? "⏸" : "▶";
@@ -860,6 +878,287 @@ takePlayer.addEventListener("ended", () => {
   playingTakeId = null;
   renderTakes();
 });
+
+// ---------- 我的唱录（takes-library） ----------
+// 首页入口进来的跨歌列表。同时只放一条：切换时先停上一条；列表项用细进度条
+// 显示当前位置。改名/删除/排序都直接落后端，学习页读的是同一份名称与顺序。
+const libraryPlayer = new Audio();
+let libraryTakes = [];
+let playingLibraryKey = null; // `${song_id}/${take_id}`
+let renamingTake = null;
+let deletingTake = null;
+let dragTakeCard = null;
+
+const takeKey = (take) => `${take.song_id}/${take.id}`;
+
+async function openTakeLibrary() {
+  show("takes");
+  await loadTakeLibrary();
+}
+
+async function loadTakeLibrary() {
+  $("takes-error").hidden = true;
+  try {
+    const res = await fetch("/api/takes");
+    if (!res.ok) throw new Error();
+    libraryTakes = await res.json();
+  } catch {
+    libraryTakes = [];
+    $("take-library").innerHTML = "";
+    $("takes-empty").hidden = true; // 拉取失败不等于没有唱录，别给错误暗示
+    showTakesError("唱录列表没加载出来，刷新页面试试");
+    return;
+  }
+  renderTakeLibrary();
+}
+
+function showTakesError(msg) {
+  $("takes-error").textContent = "😥 " + msg;
+  $("takes-error").hidden = false;
+}
+
+function renderTakeLibrary() {
+  $("takes-empty").hidden = libraryTakes.length > 0;
+  const list = $("take-library");
+  list.innerHTML = "";
+  libraryTakes.forEach((take) => {
+    const key = takeKey(take);
+    const card = document.createElement("div");
+    card.className = "take-card";
+    card.dataset.key = key;
+    card.dataset.songId = take.song_id;
+    card.dataset.takeId = take.id;
+    if (key === playingLibraryKey) card.classList.add("playing");
+
+    const grip = document.createElement("span");
+    grip.className = "drag-grip";
+    grip.draggable = true;
+    grip.title = "拖动排序";
+    grip.textContent = "⠿";
+    grip.onclick = (e) => e.stopPropagation(); // 只是把手，点了不触发播放
+
+    const art = document.createElement("div");
+    art.className = "take-art";
+    art.textContent = "🎤";
+
+    const main = document.createElement("div");
+    main.className = "take-main";
+    const name = document.createElement("div");
+    name.className = "take-name";
+    name.textContent = take.name; // textContent 防注入
+    const info = document.createElement("div");
+    info.className = "take-info";
+    info.textContent = `来自《${take.song_title}》· ${formatDuration(take.duration)}`;
+    const progress = document.createElement("div");
+    progress.className = "take-progress";
+    progress.appendChild(document.createElement("i"));
+    main.append(name, info, progress);
+
+    const play = document.createElement("button");
+    play.className = "take-action play";
+    play.title = "回放这条唱录";
+    play.textContent = key === playingLibraryKey ? "⏸" : "▶";
+    play.onclick = (e) => { e.stopPropagation(); toggleLibraryPlay(take); };
+
+    const rename = document.createElement("button");
+    rename.className = "take-action rename";
+    rename.title = "重命名";
+    rename.textContent = "✏️";
+    rename.onclick = (e) => { e.stopPropagation(); openTakeRename(take); };
+
+    const del = document.createElement("button");
+    del.className = "take-action del";
+    del.title = "删掉这条唱录";
+    del.textContent = "🗑";
+    del.onclick = (e) => { e.stopPropagation(); openTakeDelete(take); };
+
+    // 点卡片本体也能播放，按钮各自 stopPropagation 拦掉
+    card.onclick = () => toggleLibraryPlay(take);
+    card.append(grip, art, main, play, rename, del);
+    list.appendChild(card);
+  });
+  updateLibraryPlaying();
+}
+
+function updateLibraryPlaying() {
+  document.querySelectorAll(".take-card").forEach((card) => {
+    const on = card.dataset.key === playingLibraryKey && !libraryPlayer.paused;
+    card.classList.toggle("playing", on);
+    const btn = card.querySelector(".take-action.play");
+    if (btn) btn.textContent = on ? "⏸" : "▶";
+    if (!on) {
+      const bar = card.querySelector(".take-progress i");
+      if (bar) bar.style.width = "0%";
+    }
+  });
+}
+
+function toggleLibraryPlay(take) {
+  $("takes-error").hidden = true; // 上次播放失败的提示不该赖在页面上
+  const key = takeKey(take);
+  if (key === playingLibraryKey) {
+    // 同一条：暂停后从原位置继续，不重新加载
+    if (libraryPlayer.paused) {
+      libraryPlayer.play().catch(() => playLibraryError());
+    } else {
+      libraryPlayer.pause();
+    }
+    updateLibraryPlaying();
+    return;
+  }
+  stopLibraryPlayback();
+  libraryPlayer.src = `/api/songs/${take.song_id}/takes/${take.id}/audio`;
+  playingLibraryKey = key;
+  libraryPlayer.play().catch(playLibraryError);
+  updateLibraryPlaying();
+}
+
+function playLibraryError() {
+  showTakesError("这条唱录放不出来，文件可能已经不在了");
+  stopLibraryPlayback();
+}
+
+function stopLibraryPlayback() {
+  libraryPlayer.pause();
+  // 清掉 src 才会中止未完成的 Range 请求：否则紧接着删文件，服务端可能正在读
+  libraryPlayer.removeAttribute("src");
+  libraryPlayer.load();
+  playingLibraryKey = null;
+  updateLibraryPlaying();
+}
+
+libraryPlayer.addEventListener("play", updateLibraryPlaying);
+libraryPlayer.addEventListener("pause", updateLibraryPlaying);
+libraryPlayer.addEventListener("ended", () => {
+  playingLibraryKey = null;
+  updateLibraryPlaying();
+});
+libraryPlayer.addEventListener("timeupdate", () => {
+  if (!playingLibraryKey) return;
+  const card = [...document.querySelectorAll(".take-card")]
+    .find((el) => el.dataset.key === playingLibraryKey);
+  const bar = card && card.querySelector(".take-progress i");
+  if (!bar) return;
+  const total = libraryPlayer.duration || 0;
+  bar.style.width = total ? `${Math.min(100, (libraryPlayer.currentTime / total) * 100)}%` : "0%";
+});
+
+// ---- 重命名 ----
+function openTakeRename(take) {
+  renamingTake = take;
+  $("take-rename-input").value = take.name;
+  $("take-rename-error").hidden = true;
+  $("take-rename-dialog").showModal();
+  $("take-rename-input").focus();
+  $("take-rename-input").select();
+}
+
+$("btn-take-rename-cancel").onclick = () => $("take-rename-dialog").close();
+$("take-rename-dialog").addEventListener("close", () => { renamingTake = null; });
+
+$("btn-take-rename-save").onclick = async () => {
+  const take = renamingTake;
+  if (!take) return;
+  const name = $("take-rename-input").value.trim();
+  if (!name) {
+    $("take-rename-error").textContent = "😥 名字不能为空";
+    $("take-rename-error").hidden = false;
+    return;
+  }
+  const res = await fetch(`/api/songs/${take.song_id}/takes/${take.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    $("take-rename-error").textContent = "😥 " + ((await res.json()).detail || "改名失败");
+    $("take-rename-error").hidden = false;
+    return;
+  }
+  take.name = (await res.json()).name;
+  $("take-rename-dialog").close();
+  // 就地更新卡片标题，不整页重渲染，避免滚动位置和播放状态跳动
+  const card = [...document.querySelectorAll(".take-card")]
+    .find((el) => el.dataset.key === takeKey(take));
+  const label = card && card.querySelector(".take-name");
+  if (label) label.textContent = take.name;
+};
+
+// ---- 删除（二次确认） ----
+function openTakeDelete(take) {
+  deletingTake = take;
+  $("take-delete-name").textContent = take.name;
+  $("take-delete-dialog").showModal();
+}
+
+$("btn-take-delete-cancel").onclick = () => $("take-delete-dialog").close();
+$("take-delete-dialog").addEventListener("close", () => { deletingTake = null; });
+
+$("btn-take-delete-ok").onclick = async () => {
+  const take = deletingTake;
+  $("take-delete-dialog").close();
+  if (!take) return;
+  if (takeKey(take) === playingLibraryKey) stopLibraryPlayback();
+  const res = await fetch(`/api/songs/${take.song_id}/takes/${take.id}`, { method: "DELETE" });
+  if (!res.ok) {
+    showTakesError("删除失败，再试一次");
+    return;
+  }
+  const key = takeKey(take);
+  libraryTakes = libraryTakes.filter((t) => takeKey(t) !== key);
+  renderTakeLibrary();
+};
+
+// ---- 拖动排序 ----
+// 只有 ⠿ 把手能拖：点卡片是播放，整卡可拖会让单击变得别扭
+const takeLibraryEl = $("take-library");
+takeLibraryEl.addEventListener("dragstart", (e) => {
+  const grip = e.target.closest(".drag-grip");
+  if (!grip) return;
+  dragTakeCard = grip.closest(".take-card");
+  dragTakeCard.classList.add("dragging");
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setDragImage(dragTakeCard, 24, 24);
+  }
+});
+
+takeLibraryEl.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  if (!dragTakeCard) return;
+  const after = [...takeLibraryEl.querySelectorAll(".take-card:not(.dragging)")]
+    .find((el) => e.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2);
+  if (after) takeLibraryEl.insertBefore(dragTakeCard, after);
+  else takeLibraryEl.appendChild(dragTakeCard);
+});
+
+takeLibraryEl.addEventListener("drop", (e) => e.preventDefault());
+
+takeLibraryEl.addEventListener("dragend", async () => {
+  if (!dragTakeCard) return;
+  dragTakeCard.classList.remove("dragging");
+  dragTakeCard = null;
+  const cards = [...takeLibraryEl.querySelectorAll(".take-card")];
+  const items = cards.map((el) => ({ song_id: el.dataset.songId, take_id: el.dataset.takeId }));
+  try {
+    const res = await fetch("/api/takes/order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (res.ok) {
+      const byKey = new Map(libraryTakes.map((t) => [takeKey(t), t]));
+      libraryTakes = items.map((it) => byKey.get(`${it.song_id}/${it.take_id}`)).filter(Boolean);
+      return;
+    }
+    await loadTakeLibrary(); // 409（期间又录了一条）或过期：重拉服务端顺序
+    if (res.status === 409) showTakesError("唱录列表刚刚有变化，已经帮你刷新了");
+  } catch {
+    await loadTakeLibrary();
+  }
+});
+
+$("btn-takes-back").onclick = () => { show("library"); loadSongs(); };
 
 // 播放/暂停图标（SVG，和内嵌的其他按钮图标配套）
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15L20 12z" fill="currentColor"/></svg>';

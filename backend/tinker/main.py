@@ -27,6 +27,7 @@ recorder = Recorder(RECORDINGS_DIR)
 store = SongStore(DATA_DIR / "songs.json")
 separator = karaoke.StemSeparator(store, RECORDINGS_DIR, STEMS_DIR, DATA_DIR / "hf-cache")
 take_recorder = takes.TakeRecorder(store, STEMS_DIR, TAKES_DIR)
+takes.migrate_takes(store)  # 旧唱录补 name/position，幂等
 
 
 def _migrate_marked_annotations() -> None:
@@ -79,6 +80,17 @@ class TakeStopRequest(BaseModel):
     playback_started_ms: int
 
 
+class TakeRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=takes.TAKE_NAME_MAX)
+
+
+class TakeOrderItem(BaseModel):
+    song_id: str
+    take_id: str
+
+
+class TakeOrderRequest(BaseModel):
+    items: list[TakeOrderItem]
 
 
 @app.post("/api/recordings/start", status_code=201)
@@ -253,6 +265,35 @@ def _get_song(song_id: str) -> Song:
     if song is None:
         raise HTTPException(status_code=404, detail="歌曲不存在")
     return song
+
+
+# ---------- 我的唱录（takes-library） ----------
+
+@app.get("/api/takes")
+def list_takes() -> list[dict]:
+    """跨歌扁平列表：唱录页只关心唱录本身，不需要前端拉全量歌曲再摊平。"""
+    return take_recorder.list_all()
+
+
+@app.put("/api/takes/order")
+def reorder_takes(req: TakeOrderRequest) -> dict:
+    refs = [(item.song_id, item.take_id) for item in req.items]
+    # 全量提交，过期列表（期间又录了一条）409，避免把新唱录排丢
+    if not take_recorder.reorder(refs):
+        raise HTTPException(status_code=409, detail="唱录列表已变化，刷新后再试")
+    return {"status": "ok"}
+
+
+@app.put("/api/songs/{song_id}/takes/{take_id}")
+def rename_take(song_id: str, take_id: str, req: TakeRenameRequest) -> dict:
+    song = _get_song(song_id)
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="名字不能为空")
+    try:
+        return take_recorder.rename(song, take_id, name)
+    except takes.TakeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/api/songs/{song_id}/takes/start", status_code=201)

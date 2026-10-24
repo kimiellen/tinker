@@ -12,13 +12,19 @@ import pytest
 
 from tinker import takes as takes_mod
 from tinker.store import Song, SongStore
-from tinker.takes import TakeError, TakeRecorder, mix_args
+from tinker.takes import (TakeError, TakeRecorder, default_take_name, migrate_takes,
+                          mix_args)
 
 SR = 44100
 
 
-def _song(song_id="s1", duration=10.0):
-    return Song(id=song_id, title="S", audio_file=f"{song_id}.wav", duration=duration)
+def _song(song_id="s1", duration=10.0, title="S"):
+    return Song(id=song_id, title=title, audio_file=f"{song_id}.wav", duration=duration)
+
+
+def _take(take_id, created_at, **extra):
+    return {"id": take_id, "file": f"{take_id}.mp3", "start": 0, "offset_ms": 0,
+            "duration": 1.0, "created_at": created_at, **extra}
 
 
 def _tone(path: Path, freq: float, seconds: float):
@@ -244,3 +250,100 @@ def test_startup_cleans_intermediate_files_only(tmp_path):
     assert not (takes / song.id / "x.wav").exists()
     assert not (takes / song.id / "x.pcm").exists()
     assert (takes / song.id / "keep.mp3").exists()
+
+
+# ---------- 我的唱录（takes-library） ----------
+
+def test_default_take_name_is_song_plus_local_time():
+    assert default_take_name("My Song", "2026-10-24T23:25:00") == "My Song-10月24日 23:25"
+    assert default_take_name("My Song", "2026-01-05T09:07:00") == "My Song-1月5日 09:07"
+    # 脏数据不能让列表打不开：退回原名或纯歌名
+    assert default_take_name("My Song", "") == "My Song"
+    assert default_take_name("My Song", "garbage") == "My Song-garbage"
+
+
+def test_stop_names_take_and_puts_it_first(tmp_path, monkeypatch):
+    store, song, rec, stems, takes = _setup(tmp_path)
+    song = store.get(song.id)
+    song.takes = [_take("old", "2026-10-21T10:00:00", name="旧唱录", position=5)]
+    store.update(song)
+
+    folder = takes / song.id
+    folder.mkdir(parents=True)
+    raw, wav = folder / "abc123.pcm", folder / "abc123.wav"
+    t = np.arange(int(1.0 * SR)) / SR
+    _write_raw(raw, 0.4 * np.sin(2 * np.pi * 660 * t))
+    monkeypatch.setattr(TakeRecorder, "_stop_process", staticmethod(lambda active: None))
+    rec._active = takes_mod._ActiveTake("abc123", song.id, 0.0, raw, wav, None, None, 0, 0)
+    take = rec.stop(store.get(song.id), "abc123", playback_started_ms=0)
+
+    assert take["name"] == default_take_name("S", take["created_at"])
+    assert take["position"] == 4, "新唱录排在已有唱录前面"
+    assert store.get(song.id).takes[-1]["name"] == take["name"]
+
+
+def test_migrate_takes_fills_names_and_order(tmp_path):
+    store = SongStore(tmp_path / "songs.json")
+    store.add(Song(id="s1", title="My Song", audio_file="s1.wav", duration=10.0,
+                   takes=[_take("old", "2026-10-21T10:00:00"),
+                          _take("new", "2026-10-24T23:25:00")]))
+    migrate_takes(store)
+
+    takes = {t["id"]: t for t in store.get("s1").takes}
+    assert takes["new"]["name"] == "My Song-10月24日 23:25"
+    assert takes["old"]["name"] == "My Song-10月21日 10:00"
+    assert takes["new"]["position"] == 0
+    assert takes["old"]["position"] == 1
+    # 幂等：第二次不再改写 songs.json
+    snapshot = (tmp_path / "songs.json").read_text(encoding="utf-8")
+    migrate_takes(store)
+    assert (tmp_path / "songs.json").read_text(encoding="utf-8") == snapshot
+
+
+def test_migrate_takes_keeps_already_ordered_takes_in_place(tmp_path):
+    store = SongStore(tmp_path / "songs.json")
+    store.add(Song(id="s1", title="S", audio_file="s1.wav", duration=10.0,
+                   takes=[_take("b", "2026-10-20T10:00:00", name="B", position=3),
+                          _take("a", "2026-10-21T10:00:00", name="A", position=7),
+                          _take("new", "2026-10-24T10:00:00")]))
+    migrate_takes(store)
+
+    takes = {t["id"]: t for t in store.get("s1").takes}
+    assert takes["b"]["position"] < takes["a"]["position"], "已有排序的相对顺序不变"
+    assert takes["new"]["position"] > takes["a"]["position"], "没排过的旧唱录接在后面"
+    assert takes["new"]["name"] == "S-10月24日 10:00"
+
+
+def test_rename_persists_and_rejects_unknown_take(tmp_path):
+    store, song, rec, stems, takes = _setup(tmp_path)
+    song = store.get(song.id)
+    song.takes = [_take("t1", "2026-10-24T10:00:00", name="旧名字", position=0)]
+    store.update(song)
+
+    rec.rename(store.get(song.id), "t1", "新名字")
+    assert store.get(song.id).takes[0]["name"] == "新名字"
+    with pytest.raises(TakeError):
+        rec.rename(store.get(song.id), "nope", "x")
+
+
+def test_list_all_and_reorder_across_songs(tmp_path):
+    store = SongStore(tmp_path / "songs.json")
+    store.add(Song(id="s1", title="First", audio_file="s1.wav", duration=10.0,
+                   takes=[_take("a", "2026-10-20T10:00:00", name="A", position=0),
+                          _take("b", "2026-10-22T10:00:00", name="B", position=2)]))
+    store.add(Song(id="s2", title="Second", audio_file="s2.wav", duration=10.0,
+                   takes=[_take("c", "2026-10-21T10:00:00", name="C", position=1)]))
+    rec = TakeRecorder(store, tmp_path / "stems", tmp_path / "takes")
+
+    rows = rec.list_all()
+    assert [(r["song_id"], r["id"]) for r in rows] == [("s1", "a"), ("s2", "c"), ("s1", "b")]
+    assert rows[1]["song_title"] == "Second"
+
+    assert rec.reorder([("s2", "c"), ("s1", "b"), ("s1", "a")])
+    assert [r["id"] for r in rec.list_all()] == ["c", "b", "a"]
+    assert [(t["id"], t["position"]) for t in store.get("s1").takes] == [("a", 2), ("b", 1)]
+
+    # 少提交/多提交/重复都算清单过期，不能部分生效
+    assert not rec.reorder([("s1", "a")])
+    assert not rec.reorder([("s1", "a"), ("s1", "a"), ("s2", "c")])
+    assert [r["id"] for r in rec.list_all()] == ["c", "b", "a"]
