@@ -181,3 +181,15 @@ dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--t
 .pbtn.main svg { width: 32px; height: 32px; }
 .pbtn.on { background: var(--teal); color: #fff; }
 .speed { font-size: 14px; font-weight: bold; color: var(--ink); width: 48px; text-align: center; }
+
+/* 原唱 / 伴奏切换（karaoke）：放在标题下、歌词上，是孩子最常点的开关 */
+.stem-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: -4px 0 14px; }
+.stem-switch { display: inline-flex; background: #F1E9DF; border-radius: 999px; padding: 4px; }
+.stem-btn {
+  border: none; background: transparent; color: var(--ink-soft); font-family: inherit;
+  font-weight: bold; font-size: 15px; padding: 8px 18px; border-radius: 999px; cursor: pointer;
+}
+.stem-btn.on { background: var(--card); color: var(--ink); box-shadow: 0 2px 6px rgba(74,64,57,.12); }
+.stem-btn.busy { animation: stem-pulse 1.2s ease-in-out infinite; }
+@keyframes stem-pulse { 50% { opacity: .45; } }
+.stem-hint { margin: 0; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }

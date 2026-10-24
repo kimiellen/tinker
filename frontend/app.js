@@ -5,7 +5,10 @@ const $ = (id) => document.getElementById(id);
 
 const screens = { library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4") };
 function show(name) {
-  if (name !== "learn") stopLearning(); // 离开学习页就停声
+  if (name !== "learn") {
+    stopLearning();      // 离开学习页就停声
+    stopKaraokePolling(); // 伴奏生成交给后端继续跑，前端不用再轮询
+  }
   if (name !== "lyrics") stopAlignPolling();
   for (const [key, el] of Object.entries(screens)) el.classList.toggle("active", key === name);
 }
@@ -291,6 +294,15 @@ function stopAlignPolling() {
 const SPEEDS = [1, 0.75, 0.5];
 const player = new Audio();
 let learnSong = null;
+
+// ---------- 原唱 / 伴奏（karaoke） ----------
+// 伴奏由后端 demucs 预生成（约 1 分钟），前端只负责：没生成时先播原唱并等，
+// 生成好后切源。demucs 输出与源等长且时间对齐，所以切源按 currentTime 直接还原
+let currentStem = "original";   // original | instrumental
+let karaokeStatus = "none";     // 后端 song.karaoke_status：none|running|done|error
+let wantInstrumental = false;   // 用户点了伴奏但还在等生成
+let karaokeTimer = null;
+let stemSwitchToken = 0;        // 切源代次：音源元数据回调晚到时，丢弃过期的恢复动作
 let lineEls = [];
 let currentLine = 0;
 let loopOne = false;
@@ -422,6 +434,18 @@ function openLearn(song) {
     return el;
   });
   player.src = `/api/songs/${song.id}/audio`;
+  // 伴奏状态随歌曲详情一起拿到：已生成切源零等待，正在生成则接着轮询
+  currentStem = "original";
+  stemSwitchToken++; // 让上一首歌还没落地的切源回调失效
+  wantInstrumental = false;
+  karaokeStatus = song.karaoke_status || "none";
+  stopKaraokePolling();
+  hideKaraokeHint();
+  if (karaokeStatus === "running") {
+    showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+    startKaraokePolling();
+  }
+  updateStemUI();
   currentLine = 0;
   activeLine = -1;
   linePlaying = false;
@@ -472,6 +496,132 @@ function scrollLineIntoView() {
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
+
+// ---------- 原唱 / 伴奏切换（karaoke） ----------
+function stemUrl(stem) {
+  const base = `/api/songs/${learnSong.id}/audio`;
+  return stem === "instrumental" ? base + "?stem=instrumental" : base;
+}
+
+function showKaraokeHint(text) {
+  $("karaoke-hint").textContent = text;
+  $("karaoke-hint").hidden = false;
+}
+
+function hideKaraokeHint() {
+  $("karaoke-hint").hidden = true;
+}
+
+function updateStemUI() {
+  $("btn-stem-original").classList.toggle("on", currentStem === "original");
+  $("btn-stem-instrumental").classList.toggle("on", currentStem === "instrumental");
+  // 生成中给"伴奏"按钮一个呼吸效果：孩子知道点了有用，只是要等
+  $("btn-stem-instrumental").classList.toggle(
+    "busy", karaokeStatus === "running" && currentStem !== "instrumental");
+}
+
+// 换音轨：记住位置/变速/是否在播，新音源元数据到了再恢复，避免回到 0
+function switchStem(next) {
+  if (next === currentStem) return;
+  const t = player.currentTime;
+  const rate = player.playbackRate;
+  const wasPlaying = linePlaying;
+  currentStem = next;
+  const token = ++stemSwitchToken;
+  player.src = stemUrl(next);
+  const restore = () => {
+    if (token !== stemSwitchToken) return; // 期间又切了源/换了歌，这次恢复已过期
+    // 两条音轨等长，但跳到结尾附近时留一点余量，免得一换源就 ended
+    const end = player.duration || t;
+    player.currentTime = Math.min(t, Math.max(0, end - 0.05));
+    player.playbackRate = rate;
+    // 换源期间如果已经离开学习页，不能在这里把声音重新放出来
+    if (wasPlaying && screens.learn.classList.contains("active")) player.play().catch(() => {});
+  };
+  if (player.readyState >= 1) restore();
+  else player.addEventListener("loadedmetadata", restore, { once: true });
+  updateStemUI();
+}
+
+function selectStem(stem) {
+  if (!learnSong) return;
+  if (stem === "original") {
+    wantInstrumental = false;
+    hideKaraokeHint();
+    switchStem("original");
+    return;
+  }
+  if (karaokeStatus === "done") {
+    wantInstrumental = false;
+    hideKaraokeHint();
+    switchStem("instrumental");
+    return;
+  }
+  // 还没生成：先播着原唱，后台开始做，做完自动切过去
+  wantInstrumental = true;
+  if (karaokeStatus === "running") {
+    showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+    startKaraokePolling();
+    return;
+  }
+  requestKaraoke();
+}
+
+async function requestKaraoke() {
+  showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+  karaokeStatus = "running";
+  updateStemUI();
+  const res = await fetch(`/api/songs/${learnSong.id}/separate`, { method: "POST" });
+  // 202=刚开始；409=已经在做（比如本页之前点过）。其余算失败，允许再点重试
+  if (!res.ok && res.status !== 409) {
+    karaokeStatus = "error";
+    showKaraokeHint("伴奏没做成，再点一次「伴奏」试试");
+    updateStemUI();
+    return;
+  }
+  startKaraokePolling();
+}
+
+function startKaraokePolling() {
+  if (karaokeTimer) return;
+  karaokeTimer = setInterval(pollKaraoke, 2000);
+  pollKaraoke();
+}
+
+function stopKaraokePolling() {
+  clearInterval(karaokeTimer);
+  karaokeTimer = null;
+}
+
+async function pollKaraoke() {
+  if (!learnSong) {
+    stopKaraokePolling();
+    return;
+  }
+  let song;
+  try {
+    song = await (await fetch(`/api/songs/${learnSong.id}`)).json();
+  } catch {
+    return; // 网络抖一下不致命，下一轮再试
+  }
+  karaokeStatus = song.karaoke_status || "none";
+  if (karaokeStatus === "running") return;
+  stopKaraokePolling();
+  updateStemUI();
+  if (karaokeStatus === "done") {
+    hideKaraokeHint();
+    if (wantInstrumental) {
+      wantInstrumental = false;
+      switchStem("instrumental");
+    }
+  } else if (karaokeStatus === "error") {
+    wantInstrumental = false;
+    showKaraokeHint("伴奏没做成，再点一次「伴奏」试试");
+  }
+}
+
+$("btn-stem-original").onclick = () => selectStem("original");
+$("btn-stem-instrumental").onclick = () => selectStem("instrumental");
 
 // 播放/暂停图标（SVG，和内嵌的其他按钮图标配套）
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15L20 12z" fill="currentColor"/></svg>';
