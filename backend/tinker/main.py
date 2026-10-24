@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner, annotate, karaoke, markup
+from . import aligner, annotate, karaoke, markup, takes
 from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
@@ -19,12 +19,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 RECORDINGS_DIR = DATA_DIR / "recordings"
 STEMS_DIR = DATA_DIR / "stems"
+TAKES_DIR = DATA_DIR / "takes"
 FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="tinker")
 recorder = Recorder(RECORDINGS_DIR)
 store = SongStore(DATA_DIR / "songs.json")
 separator = karaoke.StemSeparator(store, RECORDINGS_DIR, STEMS_DIR, DATA_DIR / "hf-cache")
+take_recorder = takes.TakeRecorder(store, STEMS_DIR, TAKES_DIR)
 
 
 def _migrate_marked_annotations() -> None:
@@ -62,6 +64,21 @@ class OrderRequest(BaseModel):
 
 class MarkupRequest(BaseModel):
     text: str = Field(max_length=2000)
+
+
+class TakeStartRequest(BaseModel):
+    start: float = Field(ge=0)
+
+
+class TakeCancelRequest(BaseModel):
+    take_id: str
+
+
+class TakeStopRequest(BaseModel):
+    take_id: str
+    playback_started_ms: int
+
+
 
 
 @app.post("/api/recordings/start", status_code=201)
@@ -108,6 +125,7 @@ def delete_song(song_id: str) -> dict:
     # 彻底删除：录音 wav 与伴奏一起清掉，不留孤儿文件
     (RECORDINGS_DIR / song.audio_file).unlink(missing_ok=True)
     separator.remove(song.id)
+    take_recorder.remove_all(song.id)
     return {"status": "deleted"}
 
 
@@ -235,6 +253,57 @@ def _get_song(song_id: str) -> Song:
     if song is None:
         raise HTTPException(status_code=404, detail="歌曲不存在")
     return song
+
+
+@app.post("/api/songs/{song_id}/takes/start", status_code=201)
+def start_take(song_id: str, req: TakeStartRequest) -> dict:
+    """开始录跟唱：等麦克风真正出第一帧再返回，前端随后起播。"""
+    song = _get_song(song_id)
+    try:
+        return take_recorder.start(song, req.start)
+    except takes.TakeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/songs/{song_id}/takes/stop")
+def stop_take(song_id: str, req: TakeStopRequest) -> dict:
+    """停止录音并与伴奏混音。playback_started_ms 是前端记录的起播墙钟。"""
+    song = _get_song(song_id)
+    try:
+        return take_recorder.stop(song, req.take_id, req.playback_started_ms)
+    except takes.TakeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/songs/{song_id}/takes/cancel")
+def cancel_take(song_id: str, req: TakeCancelRequest) -> dict:
+    """页面关闭/刷新时的兜底取消（sendBeacon），丢掉进行中的录音。"""
+    song = _get_song(song_id)
+    try:
+        take_recorder.cancel(song.id, req.take_id)
+    except takes.TakeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"status": "cancelled"}
+
+
+@app.get("/api/songs/{song_id}/takes/{take_id}/audio")
+def take_audio(song_id: str, take_id: str) -> FileResponse:
+    song = _get_song(song_id)
+    try:
+        path = take_recorder.take_path(song, take_id)
+    except takes.TakeError:
+        raise HTTPException(status_code=404, detail="没有这条演唱")
+    return FileResponse(path, media_type="audio/mpeg")
+
+
+@app.delete("/api/songs/{song_id}/takes/{take_id}")
+def delete_take(song_id: str, take_id: str) -> dict:
+    song = _get_song(song_id)
+    try:
+        take_recorder.delete(song, take_id)
+    except takes.TakeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": "deleted"}
 
 
 @app.get("/api/songs/{song_id}/audio")

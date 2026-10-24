@@ -8,6 +8,8 @@ function show(name) {
   if (name !== "learn") {
     stopLearning();      // 离开学习页就停声
     stopKaraokePolling(); // 伴奏生成交给后端继续跑，前端不用再轮询
+    abortTake();          // 录制中离开：这条作废，不留在列表里
+    stopTakePlayback();
   }
   if (name !== "lyrics") stopAlignPolling();
   for (const [key, el] of Object.entries(screens)) el.classList.toggle("active", key === name);
@@ -303,6 +305,16 @@ let karaokeStatus = "none";     // 后端 song.karaoke_status：none|running|don
 let wantInstrumental = false;   // 用户点了伴奏但还在等生成
 let karaokeTimer = null;
 let stemSwitchToken = 0;        // 切源代次：音源元数据回调晚到时，丢弃过期的恢复动作
+
+// ---------- 跟唱录音（karaoke M3） ----------
+// 后端录麦克风，停止时按"起播墙钟 - 起录墙钟"的偏移与伴奏混成一段 mp3；
+// 录音期间锁住播放条与歌词点击，避免 seek/暂停/变速把音乐时间轴弄乱
+const takePlayer = new Audio();
+let takeRec = null;        // {id, start, prevSpeedIdx}
+let takeTimer = null;
+let takePreview = null;    // 回放弹窗里的成品（丢弃时要删）
+let playingTakeId = null;  // "我的演唱"列表里正在回放的那条
+let startingTake = false;  // 正在等麦克风唤醒，防止连点起两条录音
 let lineEls = [];
 let currentLine = 0;
 let loopOne = false;
@@ -446,6 +458,7 @@ function openLearn(song) {
     startKaraokePolling();
   }
   updateStemUI();
+  stopTakePlayback();
   currentLine = 0;
   activeLine = -1;
   linePlaying = false;
@@ -457,6 +470,7 @@ function openLearn(song) {
 // 连播全程零 seek——旧方案每句结尾回退 seek 接下一句，timeupdate 约 0.25s
 // 延迟会把下一句开头重播一遍（用户反馈的"句首重复发音"），这里从根上消除
 function jumpToLine(i) {
+  if (takeRec) return;
   const lines = learnSong.lines;
   currentLine = Math.max(0, Math.min(i, lines.length - 1));
   activeLine = currentLine;
@@ -470,7 +484,7 @@ function jumpToLine(i) {
 
 // 上/下一句：seek 到目标句首。播放中继续连播；暂停中只移动高亮与进度
 function stepLine(d) {
-  if (!learnSong) return;
+  if (!learnSong || takeRec) return;
   const lines = learnSong.lines;
   if (d < 0 && currentLine === 0) {
     // 第一句再往前是前奏：回到 0，不高亮任何句
@@ -522,7 +536,7 @@ function updateStemUI() {
 
 // 换音轨：记住位置/变速/是否在播，新音源元数据到了再恢复，避免回到 0
 function switchStem(next) {
-  if (next === currentStem) return;
+  if (next === currentStem) return Promise.resolve();
   const t = player.currentTime;
   const rate = player.playbackRate;
   const wasPlaying = linePlaying;
@@ -538,13 +552,18 @@ function switchStem(next) {
     // 换源期间如果已经离开学习页，不能在这里把声音重新放出来
     if (wasPlaying && screens.learn.classList.contains("active")) player.play().catch(() => {});
   };
+  const ready = new Promise((resolve) => {
+    if (player.readyState >= 1) return resolve();
+    player.addEventListener("loadedmetadata", () => resolve(), { once: true });
+  });
   if (player.readyState >= 1) restore();
   else player.addEventListener("loadedmetadata", restore, { once: true });
   updateStemUI();
+  return ready;
 }
 
 function selectStem(stem) {
-  if (!learnSong) return;
+  if (!learnSong || takeRec) return; // 录音中切源会打乱音乐时间轴
   if (stem === "original") {
     wantInstrumental = false;
     hideKaraokeHint();
@@ -622,6 +641,221 @@ async function pollKaraoke() {
 
 $("btn-stem-original").onclick = () => selectStem("original");
 $("btn-stem-instrumental").onclick = () => selectStem("instrumental");
+
+// ---------- 跟唱录音与"我的演唱" ----------
+function fmtClock(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+function setRecordingUI(on) {
+  $("btn-take").textContent = on ? "⏹ 停止 0:00" : "🎤 录跟唱";
+  $("btn-take").classList.toggle("recording", on);
+  // 录音期间锁住播放条与歌词点击：seek/暂停/变速都会破坏音乐时间轴
+  document.querySelector(".player-bar").classList.toggle("locked", on);
+  $("line-list").classList.toggle("locked", on);
+}
+
+function tickTake() {
+  if (!takeRec) return;
+  // 计时用播放器音频时钟，不用墙钟：更贴近真正唱了多久
+  $("btn-take").textContent = "⏹ 停止 " + fmtClock(Math.max(0, player.currentTime - takeRec.start));
+}
+
+async function toggleTake() {
+  if (startingTake) return;
+  if (takeRec) {
+    await stopTake();
+    return;
+  }
+  startingTake = true;
+  try {
+    await startTake();
+  } finally {
+    startingTake = false;
+  }
+}
+
+async function startTake() {
+  if (!learnSong) return;
+  if (karaokeStatus !== "done") {
+    // 没伴奏就没法跟唱：顺手触发生成，做好后再点一次
+    selectStem("instrumental");
+    showKaraokeHint("等伴奏做好，再点「🎤 录跟唱」");
+    return;
+  }
+  await switchStem("instrumental"); // 跟唱必须踩着伴奏；切换是异步的，等它落定
+  if (takeRec) return;
+  const start = Math.min(player.currentTime, Math.max(0, (player.duration || 0) - 3));
+  const btnTake = $("btn-take");
+  btnTake.textContent = "🎤 准备麦克风…";
+  const res = await fetch(`/api/songs/${learnSong.id}/takes/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ start }),
+  });
+  if (!res.ok) {
+    btnTake.textContent = "🎤 录跟唱";
+    showKaraokeHint((await res.json()).detail || "录音没启动，再试一次");
+    return;
+  }
+  const data = await res.json();
+  player.pause();
+  loopOne = false;
+  $("btn-loop").classList.remove("on");
+  player.currentTime = start;
+  player.playbackRate = 1; // 混音按原速对齐，录音期间强制 1x
+  player.play();
+  linePlaying = true;
+  takeRec = { id: data.take_id, start, prevSpeedIdx: speedIdx };
+  setRecordingUI(true);
+  takeTimer = setInterval(tickTake, 500);
+  tickTake();
+  updateLearnUI();
+}
+
+async function stopTake(silent = false) {
+  if (!takeRec) return;
+  const rec = takeRec;
+  const songId = learnSong.id;
+  takeRec = null;
+  clearInterval(takeTimer);
+  takeTimer = null;
+  player.pause();
+  // 用播放器音频时钟回推"音乐真正开始"的墙钟，而不是 play() 调用时刻：
+  // seek + 解码 + 输出缓冲会让真正出声晚几百毫秒；四舍五入成整数毫秒（后端按 int 收）
+  const playbackStartedMs = rec.playbackStartedMs
+    ?? Math.round(Date.now() - Math.max(0, player.currentTime - rec.start) * 1000);
+  rec.playbackStartedMs = playbackStartedMs; // 失败重试沿用同一个起播时刻
+  linePlaying = false;
+  player.playbackRate = SPEEDS[speedIdx];
+  setRecordingUI(false);
+  updateLearnUI();
+  const res = await fetch(`/api/songs/${songId}/takes/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ take_id: rec.id, playback_started_ms: playbackStartedMs }),
+  });
+  if (!res.ok) {
+    if (!silent) {
+      // 后端可能还在录：把状态放回去，让孩子再点一次「停止」重试
+      takeRec = rec;
+      setRecordingUI(true);
+      $("btn-take").textContent = "⏹ 再点一次停止";
+      showKaraokeHint((await res.json()).detail || "成品没做成，再点一次停止");
+    }
+    return;
+  }
+  const take = await res.json();
+  // 录制中离开/换了歌：这条作废，别把成品挂到别的歌上
+  if (silent || !learnSong || learnSong.id !== songId) {
+    await fetch(`/api/songs/${songId}/takes/${take.id}`, { method: "DELETE" });
+    return;
+  }
+  learnSong.takes = (learnSong.takes || []).concat(take);
+  renderTakes();
+  openTakeDialog(take);
+}
+
+function abortTake() {
+  if (takeRec) stopTake(true);
+}
+
+function renderTakes() {
+  const takes = (learnSong && learnSong.takes) || [];
+  $("take-list").hidden = takes.length === 0;
+  const items = $("take-items");
+  items.innerHTML = "";
+  takes.slice().reverse().forEach((take, i) => {
+    const row = document.createElement("div");
+    row.className = "take-item";
+    const label = document.createElement("span");
+    label.className = "take-label";
+    label.textContent = `第 ${takes.length - i} 次 · ${fmtClock(take.duration)}`;
+    const play = document.createElement("button");
+    play.className = "take-btn";
+    play.textContent = playingTakeId === take.id ? "⏸" : "▶";
+    play.title = "回放这次演唱";
+    play.onclick = () => toggleTakePlay(take);
+    const del = document.createElement("button");
+    del.className = "take-btn del";
+    del.textContent = "🗑";
+    del.title = "删掉这次演唱";
+    del.onclick = () => deleteTake(take);
+    row.append(label, play, del);
+    items.appendChild(row);
+  });
+}
+
+function toggleTakePlay(take) {
+  if (playingTakeId === take.id) {
+    stopTakePlayback();
+    return;
+  }
+  player.pause();
+  linePlaying = false;
+  updateLearnUI();
+  takePlayer.src = `/api/songs/${learnSong.id}/takes/${take.id}/audio`;
+  takePlayer.play().catch(() => {});
+  playingTakeId = take.id;
+  renderTakes();
+}
+
+function stopTakePlayback() {
+  takePlayer.pause();
+  // 清掉 src 才会中止还没下载完的 Range 请求：否则紧接着删文件，
+  // 服务端可能正在读一个已经被删掉的成品（日志里一个 500）
+  takePlayer.removeAttribute("src");
+  takePlayer.load();
+  playingTakeId = null;
+  if (learnSong) renderTakes();
+}
+
+async function deleteTake(take) {
+  const songId = learnSong.id;
+  if (playingTakeId === take.id) stopTakePlayback();
+  const res = await fetch(`/api/songs/${songId}/takes/${take.id}`, { method: "DELETE" });
+  if (!res.ok) {
+    showKaraokeHint("删除失败，再试一次");
+    return;
+  }
+  if (learnSong && learnSong.id === songId) {
+    learnSong.takes = (learnSong.takes || []).filter((t) => t.id !== take.id);
+    renderTakes();
+  }
+}
+
+function openTakeDialog(take) {
+  takePreview = take;
+  $("take-audio").src = `/api/songs/${learnSong.id}/takes/${take.id}/audio`;
+  $("take-dialog").showModal();
+  $("take-audio").play().catch(() => {});
+}
+
+$("btn-take").onclick = () => toggleTake();
+$("btn-take-keep").onclick = () => {
+  $("take-audio").pause();
+  $("take-dialog").close();
+  takePreview = null;
+};
+$("btn-take-discard").onclick = async () => {
+  const take = takePreview;
+  takePreview = null;
+  $("take-audio").pause();
+  $("take-dialog").close();
+  if (take) await deleteTake(take); // 已入库的成品，丢弃=删掉
+};
+$("take-dialog").addEventListener("close", () => $("take-audio").pause());
+// 关页/刷新不会走正常停止：兜底通知后端丢掉进行中的录音（后端还有超时 watchdog 兜底）
+window.addEventListener("pagehide", () => {
+  if (!takeRec || !learnSong) return;
+  const body = new Blob([JSON.stringify({ take_id: takeRec.id })], { type: "application/json" });
+  navigator.sendBeacon(`/api/songs/${learnSong.id}/takes/cancel`, body);
+});
+takePlayer.addEventListener("ended", () => {
+  playingTakeId = null;
+  renderTakes();
+});
 
 // 播放/暂停图标（SVG，和内嵌的其他按钮图标配套）
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15L20 12z" fill="currentColor"/></svg>';
@@ -707,6 +941,7 @@ $("btn-markup-reset").onclick = async () => {
 
 // 学习页的播放/暂停
 function toggleLearnPlay() {
+  if (takeRec) return;
   if (linePlaying) {
     player.pause();
     linePlaying = false;
@@ -722,10 +957,12 @@ function toggleLearnPlay() {
   updateLearnUI();
 }
 function toggleLoop() {
+  if (takeRec) return;
   loopOne = !loopOne;
   $("btn-loop").classList.toggle("on", loopOne);
 }
 function cycleSpeed() {
+  if (takeRec) return;
   speedIdx = (speedIdx + 1) % SPEEDS.length;
   player.playbackRate = SPEEDS[speedIdx];
   $("speed-label").textContent = SPEEDS[speedIdx] + "x";
@@ -756,6 +993,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 player.addEventListener("ended", () => {
+  if (takeRec) { // 唱到曲子结尾：自动停止并生成成品
+    stopTake();
+    return;
+  }
   if (linePlaying) { // 连播到曲末自然结束：停在最末句，图标回到播放
     linePlaying = false;
     activeLine = -1;

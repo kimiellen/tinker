@@ -193,3 +193,24 @@ dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--t
 .stem-btn.busy { animation: stem-pulse 1.2s ease-in-out infinite; }
 @keyframes stem-pulse { 50% { opacity: .45; } }
 .stem-hint { margin: 0; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+
+/* 跟唱录音与"我的演唱"（karaoke M3） */
+#btn-take { margin-left: auto; }
+#btn-take.recording { animation: take-blink 1s ease-in-out infinite; }
+@keyframes take-blink { 50% { opacity: .5; } }
+/* 录音期间锁住播放条与歌词点击：任何 seek/暂停/变速都会让成品对不上拍 */
+.player-bar.locked, #line-list.locked { opacity: .45; pointer-events: none; }
+#take-list { margin: 20px 0 10px; }
+.take-list-title { font-size: 18px; margin-bottom: 10px; }
+.take-item {
+  display: flex; align-items: center; gap: 10px; background: var(--card);
+  border-radius: 999px; padding: 8px 14px; margin-bottom: 8px;
+  box-shadow: 0 2px 8px rgba(74,64,57,.06);
+}
+.take-label { flex: 1; font-size: 15px; font-weight: bold; }
+.take-btn {
+  border: none; background: var(--yellow-soft); border-radius: 999px;
+  width: 38px; height: 38px; font-size: 16px; cursor: pointer; font-family: inherit;
+}
+.take-btn.del { background: var(--coral-soft); }
+#take-audio { width: 100%; margin: 6px 0 14px; }

@@ -27,6 +27,7 @@ class Song:
     position: int = 0                    # 歌单顺序，越小越靠前（新歌排最前）
     karaoke_status: str = "none"         # none | running | done | error（伴奏分离）
     karaoke_error: str | None = None
+    takes: list[dict] = field(default_factory=list)  # 跟唱成品 [{id, file, start, offset_ms, duration, created_at}]
 
 
 class SongStore:
