@@ -3,12 +3,10 @@
 
 const $ = (id) => document.getElementById(id);
 
-const screens = { library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4"), eval: $("s5") };
+const screens = { library: $("s1"), record: $("s2"), lyrics: $("s3"), learn: $("s4") };
 function show(name) {
   if (name !== "learn") stopLearning(); // 离开学习页就停声
-  if (name !== "learn" && singing) stopSinging();
   if (name !== "lyrics") stopAlignPolling();
-  if (name !== "eval") clearInterval(evalTimer);
   for (const [key, el] of Object.entries(screens)) el.classList.toggle("active", key === name);
 }
 
@@ -607,178 +605,12 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ---------- 跟唱评估 ----------
-let mediaRecorder = null;
-let singChunks = [];
-let singing = false;
-let evalSong = null;
-let evalTimer = null;
-
-$("btn-sing").onclick = () => (singing ? stopSinging() : startSinging());
-
-async function startSinging() {
-  $("sing-error").hidden = true;
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    $("sing-error").textContent = "😥 用不了麦克风……请在浏览器里允许麦克风权限";
-    $("sing-error").hidden = false;
-    return;
-  }
-  singChunks = [];
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = (e) => singChunks.push(e.data);
-  mediaRecorder.start();
-  singing = true;
-  // 从头播放原唱，跟着唱；linePlaying 保持 false，整首播放不做句末暂停
-  stopLearning();
-  player.playbackRate = 1;
-  player.currentTime = 0;
-  player.play();
-  $("btn-sing").textContent = "⏹ 唱完了";
-  $("sing-hint").hidden = false;
-}
-
 player.addEventListener("ended", () => {
-  if (singing) stopSinging();
   if (linePlaying) { // 连播到曲末自然结束：停在最末句，图标回到播放
     linePlaying = false;
     activeLine = -1;
     updateLearnUI();
   }
 });
-
-async function stopSinging() {
-  if (!singing) return;
-  singing = false;
-  player.pause();
-  $("btn-sing").textContent = "🎤 我唱一遍";
-  $("sing-hint").hidden = true;
-  const rec = mediaRecorder;
-  const blob = await new Promise((resolve) => {
-    rec.onstop = () => resolve(new Blob(singChunks, { type: rec.mimeType }));
-    rec.stop();
-  });
-  rec.stream.getTracks().forEach((t) => t.stop());
-  uploadAttempt(blob);
-}
-
-async function uploadAttempt(blob) {
-  const fd = new FormData();
-  fd.append("audio", blob, "sing.webm");
-  const res = await fetch(`/api/songs/${learnSong.id}/attempts`, { method: "POST", body: fd });
-  if (!res.ok) {
-    $("sing-error").textContent = "😥 " + ((await res.json()).detail || "上传失败");
-    $("sing-error").hidden = false;
-    return;
-  }
-  const { attempt_id } = await res.json();
-  openEval(learnSong, attempt_id);
-}
-
-function openEval(song, attemptId) {
-  evalSong = song;
-  $("eval-song-title").textContent = song.title + " · 整首跟唱评估";
-  $("eval-summary").textContent = "正在听你唱的……🎵";
-  show("eval");
-  evalTimer = setInterval(async () => {
-    const a = await (await fetch(`/api/attempts/${attemptId}`)).json();
-    if (a.status === "done") {
-      clearInterval(evalTimer);
-      renderEval(a);
-    } else if (a.status === "error") {
-      clearInterval(evalTimer);
-      $("eval-emoji").textContent = "😥";
-      $("eval-summary").textContent = a.error || "评估失败了";
-    }
-  }, 2000);
-}
-
-const VERDICT_ICON = { good: "✅", bad: "🎯", warn: "⏱️", silent: "🔇" };
-
-function renderEval(a) {
-  const problems = a.judgments.filter((j) => j.verdict === "bad" || j.verdict === "warn").length;
-  $("eval-emoji").textContent = problems === 0 ? "🌈" : problems <= 2 ? "🌟" : "💪";
-  $("eval-summary").textContent = problems === 0
-    ? "太棒了！每一句都唱得很好！"
-    : `唱得不错！有 ${problems} 个地方可以再练练`;
-
-  const list = $("judge-list");
-  list.innerHTML = "";
-  for (const j of a.judgments) {
-    const card = document.createElement("div");
-    card.className = "judge " + j.verdict;
-    const title = document.createElement("div");
-    title.className = "t";
-    title.textContent = `第 ${j.index} 句「${j.text}」`;
-    const detail = document.createElement("div");
-    detail.className = "d";
-    detail.textContent = j.detail;
-    const icon = document.createElement("div");
-    icon.className = "icon";
-    icon.textContent = VERDICT_ICON[j.verdict] || "🎵";
-    const body = document.createElement("div");
-    body.appendChild(title);
-    body.appendChild(detail);
-    card.appendChild(icon);
-    card.appendChild(body);
-    card.style.cursor = "pointer";
-    card.onclick = () => { show("learn"); jumpToLine(j.index - 1); }; // 点卡片回去听这句
-    list.appendChild(card);
-  }
-  drawPitch(a.curve, evalSong.lines);
-}
-
-function drawPitch(curve, lines) {
-  const cv = $("pitch-canvas");
-  const ctx = cv.getContext("2d");
-  const W = cv.width, H = cv.height;
-  ctx.clearRect(0, 0, W, H);
-  const t1 = Math.max(curve.ref_times.at(-1) || 0, evalSong.duration);
-  const allMidi = [...curve.ref, ...curve.user].filter((v) => v !== null);
-  if (!allMidi.length) return;
-  const lo = Math.min(...allMidi) - 2, hi = Math.max(...allMidi) + 2;
-  const X = (t) => (t / t1) * (W - 20) + 10;
-  const Y = (m) => H - 20 - ((m - lo) / (hi - lo)) * (H - 40);
-
-  // 问题句黄色高亮 + 句界分隔线与句号
-  for (const l of lines) {
-    const v = curve.line_verdicts[l.index];
-    if (v === "bad" || v === "warn") {
-      ctx.fillStyle = "rgba(255,197,61,.28)";
-      ctx.fillRect(X(l.start), 8, X(l.end) - X(l.start), H - 26);
-    }
-  }
-  ctx.strokeStyle = "#EFE6DA";
-  ctx.fillStyle = "#B4A99E";
-  ctx.font = "12px sans-serif";
-  ctx.textAlign = "center";
-  for (const l of lines) {
-    ctx.beginPath(); ctx.moveTo(X(l.start), 8); ctx.lineTo(X(l.start), H - 18); ctx.stroke();
-    ctx.fillText(l.index, X((l.start + l.end) / 2), 18);
-  }
-
-  const draw = (times, vals, color) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    let pen = false;
-    times.forEach((t, i) => {
-      const v = vals[i];
-      if (v === null || t < 0 || t > t1) { pen = false; return; } // 无声处断笔
-      const x = X(t), y = Y(v);
-      if (pen) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-      pen = true;
-    });
-    ctx.stroke();
-  };
-  draw(curve.ref_times, curve.ref, "#3BBFB5");
-  draw(curve.user_times, curve.user, "#FF7F6E");
-}
-
-$("btn-sing-again").onclick = () => { show("learn"); startSinging(); };
-$("btn-back-learn").onclick = () => show("learn");
 
 loadSongs();

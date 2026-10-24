@@ -1,19 +1,16 @@
 """tinker 后端入口：FastAPI 应用。
 
-路由分四块：录音控制、歌曲/歌词/对齐/标注、跟唱评估、静态文件（前端 + 录音音频）。
+路由分三块：录音控制、歌曲/歌词/对齐/标注、静态文件（前端 + 录音音频）。
 """
-import json
 import threading
-import uuid
-from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner, annotate, evaluator, markup
+from . import aligner, annotate, markup
 from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
@@ -21,7 +18,6 @@ from .store import Song, SongStore
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 RECORDINGS_DIR = DATA_DIR / "recordings"
-ATTEMPTS_DIR = DATA_DIR / "attempts"
 FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="tinker")
@@ -107,17 +103,8 @@ def delete_song(song_id: str) -> dict:
     song = store.remove(song_id)
     if song is None:
         raise HTTPException(status_code=404, detail="歌曲不存在")
-    # 彻底删除：录音 wav 与该歌的全部跟唱评估记录一起清掉，不留孤儿文件
+    # 彻底删除：录音 wav 一起清掉，不留孤儿文件
     (RECORDINGS_DIR / song.audio_file).unlink(missing_ok=True)
-    if ATTEMPTS_DIR.exists():
-        for meta in ATTEMPTS_DIR.glob("*.json"):
-            try:
-                record = json.loads(meta.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if record.get("song_id") == song_id:
-                (ATTEMPTS_DIR / f"{record['id']}.webm").unlink(missing_ok=True)
-                meta.unlink(missing_ok=True)
     return {"status": "deleted"}
 
 
@@ -238,63 +225,6 @@ def expand_line(song_id: str, line_index: int, req: ExpandRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
     store.update(song)
     return {"lines": song.lines}
-
-
-# ---------- 跟唱评估 ----------
-
-def _attempt_path(attempt_id: str) -> Path:
-    if not attempt_id.isalnum():  # 挡路径穿越
-        raise HTTPException(status_code=404, detail="评估记录不存在")
-    path = ATTEMPTS_DIR / f"{attempt_id}.json"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="评估记录不存在")
-    return path
-
-
-@app.post("/api/songs/{song_id}/attempts", status_code=202)
-async def create_attempt(song_id: str, audio: UploadFile, line_index: int = Form(default=None)) -> dict:
-    song = _get_song(song_id)
-    if not song.lines:
-        raise HTTPException(status_code=400, detail="先完成分句再评估")
-    lines = song.lines
-    user_origin = 0.0
-    if line_index is not None:
-        # 单句跟唱：只评估这一句；录音从这句开头开始，时间原点对齐到句首
-        lines = [l for l in song.lines if l["index"] == line_index]
-        if not lines:
-            raise HTTPException(status_code=400, detail="没有这一句")
-        user_origin = lines[0]["start"]
-    attempt_id = uuid.uuid4().hex
-    ATTEMPTS_DIR.mkdir(parents=True, exist_ok=True)
-    audio_path = ATTEMPTS_DIR / f"{attempt_id}.webm"
-    audio_path.write_bytes(await audio.read())
-    record = {"id": attempt_id, "song_id": song_id, "status": "running",
-              "created_at": datetime.now().isoformat(timespec="seconds")}
-    (ATTEMPTS_DIR / f"{attempt_id}.json").write_text(
-        json.dumps(record, ensure_ascii=False), encoding="utf-8")
-    threading.Thread(target=_run_evaluate, args=(attempt_id, song_id, audio_path, lines, user_origin),
-                     daemon=True).start()
-    return {"attempt_id": attempt_id}
-
-
-def _run_evaluate(attempt_id: str, song_id: str, audio_path: Path, lines: list[dict],
-                  user_origin: float) -> None:
-    record_path = ATTEMPTS_DIR / f"{attempt_id}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
-    try:
-        song = store.get(song_id)
-        result = evaluator.evaluate(lines, RECORDINGS_DIR / song.audio_file, audio_path, user_origin)
-        record.update(result)
-        record["status"] = "done"
-    except Exception as e:  # noqa: BLE001 —— 同上，失败要能让前端展示
-        record["status"] = "error"
-        record["error"] = str(e)
-    record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-
-
-@app.get("/api/attempts/{attempt_id}")
-def get_attempt(attempt_id: str) -> dict:
-    return json.loads(_attempt_path(attempt_id).read_text(encoding="utf-8"))
 
 
 def _get_song(song_id: str) -> Song:

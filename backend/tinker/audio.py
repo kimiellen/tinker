@@ -1,6 +1,6 @@
 """音频解码公共工具：统一用系统 ffmpeg 解码为 16kHz 单声道 float32。
 
-对齐（whisper）和评估（librosa）吃的是同一种输入，收敛到这里。
+对齐（whisper）与句界微调吃的是同一种输入，收敛到这里。
 
 为什么不用 faster-whisper 自带的 PyAV 解码：faster-whisper 1.2.x 的
 av.open(metadata_errors=...) 与 av>=15 不兼容，而旧版 av 在 Python 3.14
