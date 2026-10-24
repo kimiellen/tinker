@@ -66,20 +66,11 @@
 <section class="screen" id="s4">
   <div class="learn-head">
     <button class="btn btn-ghost" id="btn-learn-back">← 返回</button>
-    <div>
-      <h1 class="head-title" id="learn-song-title"></h1>
-      <p class="sub">点一句，听一句；跟着唱会它</p>
-    </div>
+    <h1 class="head-title" id="learn-song-title"></h1>
+    <button class="btn btn-coral btn-md" id="btn-take">🎤 录跟唱</button>
   </div>
 
-  <div class="stem-row">
-    <div class="stem-switch" role="group" aria-label="音轨">
-      <button class="stem-btn on" id="btn-stem-original">🎤 原唱</button>
-      <button class="stem-btn" id="btn-stem-instrumental">🎹 伴奏</button>
-    </div>
-    <button class="btn btn-coral btn-md" id="btn-take">🎤 录跟唱</button>
-    <p class="stem-hint" id="karaoke-hint" hidden></p>
-  </div>
+  <p class="stem-hint" id="karaoke-hint" hidden></p>
 
   <p class="legend">小技巧标记：<b>︶</b> 下划线的两个词要连起来读 &nbsp;·&nbsp; <b>灰色的字母</b> 轻轻带过（吞音）</p>
   <div id="line-list"></div>
@@ -97,6 +88,10 @@
     <button class="pbtn" id="btn-next" title="下一句（→）">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"/><path d="M4 5.5v13L14.5 12z" fill="currentColor" stroke="none"/></svg>
     </button>
+    <div class="stem-switch" role="group" aria-label="音轨">
+      <button class="stem-btn on" id="btn-stem-original">🎤 原唱</button>
+      <button class="stem-btn" id="btn-stem-instrumental">🎹 伴奏</button>
+    </div>
     <button class="pbtn" id="btn-loop" title="单句循环（↑）：点亮后反复唱这一句">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2.5l3.5 3.5L17 9.5"/><path d="M4 11V9.5A3.5 3.5 0 017.5 6h13"/><path d="M7 21.5L3.5 18 7 14.5"/><path d="M20 13v1.5a3.5 3.5 0 01-3.5 3.5h-13"/></svg>
     </button>
