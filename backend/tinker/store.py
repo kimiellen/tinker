@@ -27,6 +27,9 @@ class Song:
     position: int = 0                    # 歌单顺序，越小越靠前（新歌排最前）
     karaoke_status: str = "none"         # none | running | done | error（伴奏分离）
     karaoke_error: str | None = None
+    karaoke_progress: int = 0            # 0-100，生成中给前端轮询
+    karaoke_version: int = 0             # 成品处理版本（模型/后处理变更时递增）
+    karaoke_gain_db: float = 0.0         # 成品相对原曲的响度增益，跟唱混音按它补偿
     takes: list[dict] = field(default_factory=list)  # 跟唱成品 [{id, file, start, offset_ms, duration, created_at}]
 
 

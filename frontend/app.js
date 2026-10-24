@@ -454,7 +454,7 @@ function openLearn(song) {
   stopKaraokePolling();
   hideKaraokeHint();
   if (karaokeStatus === "running") {
-    showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+    showKaraokeHint("正在做伴奏，大概要 6~7 分钟…先听原唱吧 🎵");
     startKaraokePolling();
   }
   updateStemUI();
@@ -579,7 +579,7 @@ function selectStem(stem) {
   // 还没生成：先播着原唱，后台开始做，做完自动切过去
   wantInstrumental = true;
   if (karaokeStatus === "running") {
-    showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+    showKaraokeHint("正在做伴奏，大概要 6~7 分钟…先听原唱吧 🎵");
     startKaraokePolling();
     return;
   }
@@ -587,7 +587,7 @@ function selectStem(stem) {
 }
 
 async function requestKaraoke() {
-  showKaraokeHint("正在做伴奏，大概要 1 分钟…先听原唱吧 🎵");
+  showKaraokeHint("正在做伴奏，大概要 6~7 分钟…先听原唱吧 🎵");
   karaokeStatus = "running";
   updateStemUI();
   const res = await fetch(`/api/songs/${learnSong.id}/separate`, { method: "POST" });
@@ -624,7 +624,11 @@ async function pollKaraoke() {
     return; // 网络抖一下不致命，下一轮再试
   }
   karaokeStatus = song.karaoke_status || "none";
-  if (karaokeStatus === "running") return;
+  if (karaokeStatus === "running") {
+    // 微调模型一首要 6 分钟上下，没有百分比孩子会以为卡死了
+    showKaraokeHint(`正在做伴奏 ${song.karaoke_progress || 0}%…先听原唱吧 🎵`);
+    return;
+  }
   stopKaraokePolling();
   updateStemUI();
   if (karaokeStatus === "done") {

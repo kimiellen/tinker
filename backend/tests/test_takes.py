@@ -77,13 +77,20 @@ def test_mix_args_trim_mic_when_recording_started_early(tmp_path):
     assert args[args.index("-ss") + 1] == "12.500"
     assert args.count("-ss") == 2
     assert args[args.index("-filter_complex") + 1].find("adelay") == -1
-    assert "volume=2.0" in args[args.index("-filter_complex") + 1]
+    assert "volume=6.0dB" in args[args.index("-filter_complex") + 1]
 
 
 def test_mix_args_pad_mic_when_recording_started_late(tmp_path):
     args = mix_args(Path("stem.mp3"), Path("mic.wav"), start=0, offset_ms=-250, out=Path("o.mp3"))
     assert args.count("-ss") == 1  # 麦克风不掐头
     assert "adelay=250:all=1" in args[args.index("-filter_complex") + 1]
+
+
+def test_mix_args_voice_gain_follows_backing_gain():
+    # 伴奏做过响度提升时，人声也要加同样的量，否则一开唱人声就变小
+    args = mix_args(Path("s.mp3"), Path("m.wav"), start=0, offset_ms=0,
+                    out=Path("o.mp3"), voice_gain_db=9.3)
+    assert "volume=9.3dB" in args[args.index("-filter_complex") + 1]
 
 
 def test_mix_aligns_voice_by_offset(tmp_path):

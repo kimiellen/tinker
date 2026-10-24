@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .store import Song, SongStore
 
-MIC_GAIN = 2.0          # 孩子对着麦克风唱通常偏轻，混音时给人声 +6dB
+MIC_GAIN_DB = 6.0       # 孩子对着麦克风唱通常偏轻，混音时给人声 +6dB
 MP3_BITRATE = "192k"
 MIN_TAKE_SECONDS = 0.5  # 比这还短的录音当作误触
 OVERRUN_GRACE_SECONDS = 15  # 歌播完后还录这么久就说明前端已经跑掉（关页/刷新技术上无法通知）
@@ -130,7 +130,9 @@ class TakeRecorder:
         stem = self._stems / song.id / "no_vocals.mp3"
         out = self._takes / song.id / f"{take_id}.mp3"
         try:
-            subprocess.run(mix_args(stem, active.wav, active.start, offset_ms, out),
+            # 伴奏成品已经按原曲响度放大过；人声跟着放大同样的量，保持二者比例
+            subprocess.run(mix_args(stem, active.wav, active.start, offset_ms, out,
+                                    voice_gain_db=MIC_GAIN_DB + song.karaoke_gain_db),
                            capture_output=True, check=True)
         except subprocess.CalledProcessError as e:
             out.unlink(missing_ok=True)
@@ -255,11 +257,13 @@ class TakeRecorder:
                 active.handle.close()
 
 
-def mix_args(stem: Path, mic: Path, start: float, offset_ms: int, out: Path) -> list[str]:
+def mix_args(stem: Path, mic: Path, start: float, offset_ms: int, out: Path,
+             voice_gain_db: float = MIC_GAIN_DB) -> list[str]:
     """伴奏从 start 起播；麦克风录音按偏移对齐后混音。
 
     offset_ms > 0：录音比音乐早开始，丢掉开头多录的那段；
     offset_ms < 0：录音比音乐晚开始，用 adelay 在开头补静音。
+    voice_gain_db 默认 +6dB；伴奏做过响度对齐时调用方把同样的增益加上去。
     """
     trim = max(0, offset_ms) / 1000.0
     delay = max(0, -offset_ms)
@@ -267,9 +271,9 @@ def mix_args(stem: Path, mic: Path, start: float, offset_ms: int, out: Path) -> 
     if trim > 0:
         args += ["-ss", f"{trim:.3f}"]
     args += ["-i", str(mic)]
-    voice = f"[1:a]volume={MIC_GAIN}"
+    voice = f"[1:a]volume={voice_gain_db:.1f}dB"
     if delay:
-        voice = f"[1:a]adelay={delay}:all=1,volume={MIC_GAIN}"
+        voice = f"[1:a]adelay={delay}:all=1,volume={voice_gain_db:.1f}dB"
     args += [
         "-filter_complex",
         f"[0:a]volume=1.0[music];{voice}[voice];"
