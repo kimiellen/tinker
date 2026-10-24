@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import aligner, annotate, markup
+from . import aligner, annotate, karaoke, markup
 from .audio import decode_audio_16k
 from .recorder import Recorder, RecordingError
 from .store import Song, SongStore
@@ -18,11 +18,13 @@ from .store import Song, SongStore
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 RECORDINGS_DIR = DATA_DIR / "recordings"
+STEMS_DIR = DATA_DIR / "stems"
 FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="tinker")
 recorder = Recorder(RECORDINGS_DIR)
 store = SongStore(DATA_DIR / "songs.json")
+separator = karaoke.StemSeparator(store, RECORDINGS_DIR, STEMS_DIR, DATA_DIR / "hf-cache")
 
 
 def _migrate_marked_annotations() -> None:
@@ -103,8 +105,9 @@ def delete_song(song_id: str) -> dict:
     song = store.remove(song_id)
     if song is None:
         raise HTTPException(status_code=404, detail="歌曲不存在")
-    # 彻底删除：录音 wav 一起清掉，不留孤儿文件
+    # 彻底删除：录音 wav 与伴奏一起清掉，不留孤儿文件
     (RECORDINGS_DIR / song.audio_file).unlink(missing_ok=True)
+    separator.remove(song.id)
     return {"status": "deleted"}
 
 
@@ -235,13 +238,30 @@ def _get_song(song_id: str) -> Song:
 
 
 @app.get("/api/songs/{song_id}/audio")
-def song_audio(song_id: str) -> FileResponse:
+def song_audio(song_id: str, stem: str = "original") -> FileResponse:
     # 只服务曲库中登记的歌曲，避免路径参数直接映射到文件系统
     song = _get_song(song_id)
+    if stem == "instrumental":
+        path = separator.stem_path(song.id)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="伴奏还没生成")
+        return FileResponse(path, media_type="audio/mpeg")
+    if stem != "original":
+        raise HTTPException(status_code=404, detail="没有这种音轨")
     path = RECORDINGS_DIR / song.audio_file
     if not path.exists():
         raise HTTPException(status_code=404, detail="录音文件丢失")
     return FileResponse(path, media_type="audio/wav")
+
+
+@app.post("/api/songs/{song_id}/separate", status_code=202)
+def separate_song(song_id: str) -> Song:
+    """触发伴奏生成。一首歌约 1 分钟，后台跑，前端轮询歌曲详情里的 karaoke_status。"""
+    song = _get_song(song_id)
+    try:
+        return separator.start(song)
+    except karaoke.KaraokeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 # 前端静态文件挂在最后，避免抢占 /api 路由。
