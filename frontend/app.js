@@ -145,6 +145,19 @@ let seconds = 0;
 $("btn-new").onclick = () => show("record");
 $("btn-takes").onclick = () => openTakeLibrary();
 
+// 录到一半就返回：丢弃这段录音，不把半截文件留在后端（与保存对话框的「不要了」一致）
+$("btn-rec-back").onclick = async () => {
+  if (recording) {
+    setRecordingUI(false);
+    await fetch("/api/recordings/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discard: true }),
+    });
+  }
+  show("library");
+};
+
 $("btn-rec-toggle").onclick = async () => {
   $("rec-error").hidden = true;
   if (!recording) {
