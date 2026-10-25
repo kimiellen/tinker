@@ -15,6 +15,10 @@ import numpy as np
 
 SAMPLE_RATE = 16000
 
+# 短时能量包络：25ms 窗、10ms 步长。人声换气与首尾静音在 100ms 尺度上都够清晰。
+ENVELOPE_FRAME_S = 0.025
+ENVELOPE_HOP_S = 0.010
+
 
 def decode_audio_16k(audio_path: Path) -> np.ndarray:
     out = subprocess.run(
@@ -23,3 +27,15 @@ def decode_audio_16k(audio_path: Path) -> np.ndarray:
         capture_output=True, check=True,
     )
     return np.frombuffer(out.stdout, dtype=np.float32)
+
+
+def rms_envelope(audio: np.ndarray) -> tuple[np.ndarray, float]:
+    """短时 RMS 能量包络；返回 (rms, 步长秒数)。
+
+    对齐切边（换气口低谷）与内录首尾静音检测共用同一套包络，口径一致。
+    """
+    frame, hop = int(ENVELOPE_FRAME_S * SAMPLE_RATE), int(ENVELOPE_HOP_S * SAMPLE_RATE)
+    if len(audio) < frame:
+        return np.zeros(0), ENVELOPE_HOP_S
+    frames = np.lib.stride_tricks.sliding_window_view(audio, frame)[::hop]
+    return np.sqrt((frames ** 2).mean(axis=1)), ENVELOPE_HOP_S

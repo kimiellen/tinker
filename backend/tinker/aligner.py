@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .audio import SAMPLE_RATE
+from .audio import SAMPLE_RATE, rms_envelope
 
 # small.en 对口音重、伴奏吵的演唱会产生大面积幻觉（把前奏听成
 # "thank you so much for watching"），实测 medium.en 才能稳定转写真实人声；
@@ -234,16 +234,6 @@ def _interpolate_gaps(intervals: list[list[float] | None], last_word_end: float)
         i = j
 
 
-def _rms_envelope(audio: np.ndarray) -> tuple[np.ndarray, float]:
-    """25ms 窗、10ms 步长的短时能量包络；人声换气低谷在 100ms 尺度上足够清晰。
-    返回 (rms, 步长秒数)。"""
-    frame, hop = int(0.025 * SAMPLE_RATE), int(0.010 * SAMPLE_RATE)
-    if len(audio) < frame:
-        return np.zeros(0), hop / SAMPLE_RATE
-    frames = np.lib.stride_tricks.sliding_window_view(audio, frame)[::hop]
-    return np.sqrt((frames ** 2).mean(axis=1)), hop / SAMPLE_RATE
-
-
 def _trough(rms: np.ndarray, hop_s: float, lo: float, hi: float) -> float | None:
     """[lo, hi] 秒内能量最低点对应的时刻；窗口不足 0.1s 返回 None。"""
     if hi - lo < 0.1:
@@ -267,7 +257,7 @@ def expand_boundary(lines: list[dict], index: int, side: str, audio: np.ndarray)
     if not 0 <= i < len(lines):
         raise AlignError("没有这一句")
     cur = lines[i]
-    rms, hop_s = _rms_envelope(audio)
+    rms, hop_s = rms_envelope(audio)
     if len(rms) == 0:
         raise AlignError("音频太短，没法微调")
 
@@ -305,7 +295,7 @@ def _valley_boundaries(intervals: list[list[float]], audio: np.ndarray) -> list[
     低谷，切在那里两头都干净。空隙太窄（真连唱）或太宽（>3s，是间奏
     而非换气）时返回 None，走中点/各自留余量兜底。
     """
-    rms, hop_s = _rms_envelope(audio)
+    rms, hop_s = rms_envelope(audio)
     if len(rms) == 0:
         return [None] * (len(intervals) - 1)
 

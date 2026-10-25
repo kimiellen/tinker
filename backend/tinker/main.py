@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from . import aligner, annotate, karaoke, markup, takes
 from .audio import decode_audio_16k
-from .recorder import Recorder, RecordingError
+from .recorder import Recorder, RecordingError, trim_silence
 from .store import Song, SongStore
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -114,7 +114,14 @@ def stop_recording(req: StopRequest):
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="歌名不能为空")
-    song = Song(id=rec.id, title=title, audio_file=rec.file, duration=rec.duration)
+    path = RECORDINGS_DIR / rec.file
+    try:
+        # 起播前/停播后各有一段静音，保存时直接裁掉；duration 用成品实际时长
+        duration = trim_silence(path)
+    except RecordingError as e:
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(e))
+    song = Song(id=rec.id, title=title, audio_file=rec.file, duration=round(duration, 1))
     store.add(song)
     return song
 
