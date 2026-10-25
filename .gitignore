@@ -1,6 +1,18 @@
 # 运行期数据与本地工具，不入库
 data/
 .tools/
-backend/.venv/
+chrome-profile/
+
+# Python 虚拟环境与缓存
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 编辑器与系统文件
+.DS_Store
+*.log
