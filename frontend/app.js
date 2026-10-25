@@ -970,7 +970,7 @@ function renderTakeLibrary() {
     const play = document.createElement("button");
     play.className = "take-action play";
     play.title = "回放这条唱录";
-    play.textContent = key === playingLibraryKey ? "⏸" : "▶";
+    setTakePlayIcon(play, key === playingLibraryKey);
     play.onclick = (e) => { e.stopPropagation(); toggleLibraryPlay(take); };
 
     const rename = document.createElement("button");
@@ -998,12 +998,18 @@ function updateLibraryPlaying() {
     const on = card.dataset.key === playingLibraryKey && !libraryPlayer.paused;
     card.classList.toggle("playing", on);
     const btn = card.querySelector(".take-action.play");
-    if (btn) btn.textContent = on ? "⏸" : "▶";
+    if (btn) setTakePlayIcon(btn, on);
     if (!on) {
       const bar = card.querySelector(".take-progress i");
       if (bar) bar.style.width = "0%";
     }
   });
+}
+
+// 暂停用与学习页播放条同一枚 SVG：⏸ 字符会按 emoji 渲染成橙色方块，和卡片风格不搭
+function setTakePlayIcon(btn, playing) {
+  if (playing) btn.innerHTML = ICON_PAUSE;
+  else btn.textContent = "▶";
 }
 
 function toggleLibraryPlay(take) {

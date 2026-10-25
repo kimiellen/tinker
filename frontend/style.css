@@ -285,6 +285,7 @@ dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--t
   display: flex; align-items: center; justify-content: center;
 }
 .take-action.play { background: var(--teal); color: #fff; font-size: 16px; }
+.take-action.play svg { width: 20px; height: 20px; } /* 暂停图标与学习页播放条同款 SVG */
 .take-action.rename { background: var(--teal-soft); }
 .take-action.del { background: var(--coral-soft); }
 .take-action:hover { filter: brightness(.96); }
