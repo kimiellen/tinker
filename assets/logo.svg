@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="tinker">
+  <rect x="1" y="1" width="94" height="94" rx="25" fill="#FF7B6B"/>
+  <path d="M74 14l2.6 6.4L83 23l-6.4 2.6L74 32l-2.6-6.4L65 23l6.4-2.6z" fill="#FFE07A"/>
+  <ellipse cx="34" cy="68" rx="12" ry="9.5" transform="rotate(-20 34 68)" fill="#FFF8F0"/>
+  <rect x="44" y="25" width="6.5" height="43" rx="3.25" fill="#FFF8F0"/>
+  <path d="M50.5 25c10.5 1.8 17 8.4 18 18-5.2-6.6-10.5-9-18-9z" fill="#FFF8F0"/>
+  <circle cx="23" cy="30" r="4" fill="#4ECDC4"/>
+</svg>
