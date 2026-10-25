@@ -673,7 +673,7 @@ function fmtClock(sec) {
   return m + ":" + String(s).padStart(2, "0");
 }
 
-function setRecordingUI(on) {
+function setTakeRecordingUI(on) {
   $("btn-take").textContent = on ? "⏹ 停止 0:00" : "🎤 录歌";
   $("btn-take").classList.toggle("recording", on);
   // 录音期间锁住播放条与歌词点击：seek/暂停/变速都会破坏音乐时间轴
@@ -733,7 +733,7 @@ async function startTake() {
   player.play();
   linePlaying = true;
   takeRec = { id: data.take_id, start, prevSpeedIdx: speedIdx };
-  setRecordingUI(true);
+  setTakeRecordingUI(true);
   takeTimer = setInterval(tickTake, 500);
   tickTake();
   updateLearnUI();
@@ -754,7 +754,7 @@ async function stopTake(silent = false) {
   rec.playbackStartedMs = playbackStartedMs; // 失败重试沿用同一个起播时刻
   linePlaying = false;
   player.playbackRate = SPEEDS[speedIdx];
-  setRecordingUI(false);
+  setTakeRecordingUI(false);
   updateLearnUI();
   const res = await fetch(`/api/songs/${songId}/takes/stop`, {
     method: "POST",
@@ -765,7 +765,7 @@ async function stopTake(silent = false) {
     if (!silent) {
       // 后端可能还在录：把状态放回去，让孩子再点一次「停止」重试
       takeRec = rec;
-      setRecordingUI(true);
+      setTakeRecordingUI(true);
       $("btn-take").textContent = "⏹ 再点一次停止";
       showKaraokeHint((await res.json()).detail || "成品没做成，再点一次停止");
     }
