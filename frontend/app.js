@@ -674,7 +674,7 @@ function fmtClock(sec) {
 }
 
 function setRecordingUI(on) {
-  $("btn-take").textContent = on ? "⏹ 停止 0:00" : "🎤 录跟唱";
+  $("btn-take").textContent = on ? "⏹ 停止 0:00" : "🎤 录歌";
   $("btn-take").classList.toggle("recording", on);
   // 录音期间锁住播放条与歌词点击：seek/暂停/变速都会破坏音乐时间轴
   document.querySelector(".player-bar").classList.toggle("locked", on);
@@ -706,7 +706,7 @@ async function startTake() {
   if (karaokeStatus !== "done") {
     // 没伴奏就没法跟唱：顺手触发生成，做好后再点一次
     selectStem("instrumental");
-    showKaraokeHint("等伴奏做好，再点「🎤 录跟唱」");
+    showKaraokeHint("等伴奏做好，再点「🎤 录歌」");
     return;
   }
   await switchStem("instrumental"); // 跟唱必须踩着伴奏；切换是异步的，等它落定
@@ -720,7 +720,7 @@ async function startTake() {
     body: JSON.stringify({ start }),
   });
   if (!res.ok) {
-    btnTake.textContent = "🎤 录跟唱";
+    btnTake.textContent = "🎤 录歌";
     showKaraokeHint((await res.json()).detail || "录音没启动，再试一次");
     return;
   }
