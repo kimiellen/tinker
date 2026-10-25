@@ -561,10 +561,19 @@ function updateStemUI() {
     "busy", karaokeStatus === "running" && currentStem !== "instrumental");
 }
 
+// 切源落点：原唱已经播完时 currentTime 停在结尾，照搬过去会一换源就 ended，
+// 听起来就是"伴奏没切"；此时从 0 开始，保留"没在播"的状态等用户按播放。
+function stemStartTime(currentTime, duration, ended) {
+  if (ended || (duration && currentTime >= duration - 0.5)) return 0;
+  return currentTime;
+}
+
 // 换音轨：记住位置/变速/是否在播，新音源元数据到了再恢复，避免回到 0
 function switchStem(next) {
   if (next === currentStem) return Promise.resolve();
   const t = player.currentTime;
+  const oldDuration = player.duration || t;
+  const startAt = stemStartTime(t, oldDuration, player.ended);
   const rate = player.playbackRate;
   const wasPlaying = linePlaying;
   currentStem = next;
@@ -574,7 +583,7 @@ function switchStem(next) {
     if (token !== stemSwitchToken) return; // 期间又切了源/换了歌，这次恢复已过期
     // 两条音轨等长，但跳到结尾附近时留一点余量，免得一换源就 ended
     const end = player.duration || t;
-    player.currentTime = Math.min(t, Math.max(0, end - 0.05));
+    player.currentTime = Math.min(startAt, Math.max(0, end - 0.05));
     player.playbackRate = rate;
     // 换源期间如果已经离开学习页，不能在这里把声音重新放出来
     if (wasPlaying && screens.learn.classList.contains("active")) player.play().catch(() => {});
