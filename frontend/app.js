@@ -350,11 +350,16 @@ let linePlaying = false;
 let activeLine = -1; // currentTime 实际落在的句；间奏段为 -1（播放中不高亮任何句）
 
 // t 落在哪句返回哪句下标；句间间隙（间奏）返回 -1。lines 按 start 有序。
-// 整文件连播不切片：句界即前句 end = 后句 start，高亮按时间戳归属，天然无重复
+// 整文件连播不切片：句界即前句 end = 后句 start，高亮按时间戳归属，天然无重复。
+// 两端各留 1ms 容差（等价于每个区间左移 1ms）：seek 到句首时 currentTime 可能比
+// 边界低一丁点（Chromium 实测 32.91 → 32.909999），不留容差这次 seek 会被算回
+// 上一句，timeupdate 随即把手动切句打回去——用户看到的是"右键按了没反应、要按
+// 好几次"；单句循环也会因此从第 6 句滑到第 5 句。
+const BOUNDARY_EPS = 0.001;
 function lineAtTime(lines, t) {
   for (let i = 0; i < lines.length; i++) {
-    if (t < lines[i].start) return -1;
-    if (t < lines[i].end) return i;
+    if (t < lines[i].start - BOUNDARY_EPS) return -1;
+    if (t < lines[i].end - BOUNDARY_EPS) return i;
   }
   return -1;
 }
