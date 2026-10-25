@@ -163,6 +163,12 @@ $("btn-rec-toggle").onclick = async () => {
   if (!recording) {
     const res = await fetch("/api/recordings/start", { method: "POST" });
     if (!res.ok) {
+      if (res.status === 409) {
+        // 页面刷新/重开后本地状态丢了，但后端还在录：接着显示录音态，
+        // 让用户能照常停下来保存或丢弃，而不是卡在「已经在录音了」
+        setRecordingUI(true);
+        return;
+      }
       showError((await res.json()).detail || "启动录音失败");
       return;
     }
