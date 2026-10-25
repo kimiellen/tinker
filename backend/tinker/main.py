@@ -127,6 +127,9 @@ def stop_recording(req: StopRequest):
         raise HTTPException(status_code=400, detail=str(e))
     song = Song(id=rec.id, title=title, audio_file=rec.file, duration=round(duration, 1))
     store.add(song)
+    # 2026-10-25 spec-change：新歌一保存就排队做伴奏，用户导完歌词打开学习页时往往已就绪。
+    # 启动失败不能影响录音保存/返回，学习页仍可点「伴奏」手动重试。
+    karaoke.start_safely(separator, song)
     return song
 
 

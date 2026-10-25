@@ -224,3 +224,23 @@ def test_postprocess_without_loudness_falls_back_to_zero_gain(tmp_path, monkeypa
     sep = StemSeparator(SongStore(tmp_path / "s.json"), tmp_path, tmp_path / "stems", tmp_path / "hf")
     assert sep._postprocess(Path("src"), Path("stem.flac"), tmp_path / "o.mp3") == 0.0
     assert "volume=0.00dB" in captured["args"][captured["args"].index("-af") + 1]
+
+
+def test_start_safely_calls_start_and_swallows_failure(tmp_path, caplog):
+    song = Song(id="a", title="A", audio_file="a.wav", duration=1.0)
+    calls = []
+
+    class Fake:
+        def start(self, s):
+            calls.append(s.id)
+
+    karaoke_mod.start_safely(Fake(), song)
+    assert calls == ["a"]
+
+    class Boom:
+        def start(self, s):
+            raise RuntimeError("boom")
+
+    karaoke_mod.start_safely(Boom(), song)  # 不能把异常抛回保存接口
+    assert "自动生成伴奏失败" in caplog.text
+    assert "boom" in caplog.text

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -31,6 +32,7 @@ EQ_FILTER = "highshelf=f=3000:g=2,highshelf=f=10000:g=2"
 GAIN_MIN_DB, GAIN_MAX_DB = -6.0, 12.0
 ERROR_TAIL_CHARS = 300
 _PCT_RE = re.compile(rb"(\d{1,3})%")
+logger = logging.getLogger(__name__)
 
 
 class KaraokeError(RuntimeError):
@@ -244,3 +246,11 @@ def _stderr_tail(stderr: str) -> str:
     lines = [ln.strip() for ln in (stderr or "").replace("\r", "\n").splitlines()]
     lines = [ln for ln in lines if ln and not re.match(r"^\d+%\|", ln)]
     return " ".join(lines[-3:])[:ERROR_TAIL_CHARS]
+
+
+def start_safely(separator: StemSeparator, song: Song) -> None:
+    """新歌保存后自动触发伴奏生成；失败只记日志，不能影响录音保存本身。"""
+    try:
+        separator.start(song)
+    except Exception:  # noqa: BLE001
+        logger.exception("新歌 %s 自动生成伴奏失败，可稍后手动重试", song.id)
