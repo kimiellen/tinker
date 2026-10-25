@@ -29,6 +29,10 @@ separator = karaoke.StemSeparator(store, RECORDINGS_DIR, STEMS_DIR, DATA_DIR / "
 take_recorder = takes.TakeRecorder(store, STEMS_DIR, TAKES_DIR)
 takes.migrate_takes(store)  # 旧唱录补 name/position，幂等
 
+# 录音是独立进程组，服务被 SIGKILL 时子进程会活下来；启动时清残留，退出时收当前录音。
+app.router.add_event_handler("startup", recorder.reap_orphans)
+app.router.add_event_handler("shutdown", recorder.shutdown)
+
 
 def _migrate_marked_annotations() -> None:
     """2026-10-23 spec-change：标注落盘形态从 liaison/swallow 结构改为 marked
